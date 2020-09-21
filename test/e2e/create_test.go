@@ -555,6 +555,7 @@ var _ = Describe("Podman create", func() {
 	})
 
 	It("create container in pod with IP should fail", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		name := "createwithstaticip"
 		pod := podmanTest.RunTopContainerInPod("", "new:"+name)
@@ -567,6 +568,7 @@ var _ = Describe("Podman create", func() {
 	})
 
 	It("create container in pod with mac should fail", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		name := "createwithstaticmac"
 		pod := podmanTest.RunTopContainerInPod("", "new:"+name)
@@ -579,6 +581,7 @@ var _ = Describe("Podman create", func() {
 	})
 
 	It("create container in pod with network should fail", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		name := "createwithnetwork"
 		pod := podmanTest.RunTopContainerInPod("", "new:"+name)
@@ -592,6 +595,7 @@ var _ = Describe("Podman create", func() {
 	})
 
 	It("create container in pod with ports should fail", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		name := "createwithports"
 		pod := podmanTest.RunTopContainerInPod("", "new:"+name)
@@ -604,6 +608,7 @@ var _ = Describe("Podman create", func() {
 	})
 
 	It("create container in pod ppublish ports should fail", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		name := "createwithpublishports"
 		pod := podmanTest.RunTopContainerInPod("", "new:"+name)

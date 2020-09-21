@@ -116,6 +116,7 @@ var _ = Describe("Podman login and logout", func() {
 	})
 
 	It("podman login and logout without registry parameter", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 
 		registriesConf, err := ioutil.TempFile("", "TestLoginWithoutParameter")

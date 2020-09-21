@@ -50,7 +50,9 @@ var _ = Describe("Podman run", func() {
 	})
 
 	It("podman run a container based on a complex local image name", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		imageName := strings.TrimPrefix(nginx, "quay.io/")
 		session := podmanTest.Podman([]string{"run", imageName, "ls"})
 		session.WaitWithDefaultTimeout()
@@ -311,7 +313,9 @@ USER bin`
 	})
 
 	It("podman run limits test", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--rm", "--ulimit", "rtprio=99", "--cap-add=sys_nice", fedoraMinimal, "cat", "/proc/self/sched"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -344,6 +348,7 @@ USER bin`
 
 	It("podman run limits host test", func() {
 		SkipIfRemote()
+		fmt.Printf("I AM NOT ROOT BUT I'M STILL RUNNING\n")
 
 		var l syscall.Rlimit
 
@@ -370,7 +375,10 @@ USER bin`
 	})
 
 	It("podman run sysctl test", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
+		fmt.Println("I AM NOT ROOT BUT I'M STILL RUNNING")
 		session := podmanTest.Podman([]string{"run", "--rm", "--sysctl", "net.core.somaxconn=65535", ALPINE, "sysctl", "net.core.somaxconn"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -378,7 +386,10 @@ USER bin`
 	})
 
 	It("podman run blkio-weight test", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
+		fmt.Println("I AM NOT ROOT BUT I'M STILL RUNNING")
 		cgroupsv2, err := cgroups.IsCgroup2UnifiedMode()
 		Expect(err).To(BeNil())
 
@@ -403,7 +414,9 @@ USER bin`
 	})
 
 	It("podman run device-read-bps test", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 
 		cgroupsv2, err := cgroups.IsCgroup2UnifiedMode()
 		Expect(err).To(BeNil())
@@ -424,7 +437,9 @@ USER bin`
 	})
 
 	It("podman run device-write-bps test", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 
 		cgroupsv2, err := cgroups.IsCgroup2UnifiedMode()
 		Expect(err).To(BeNil())
@@ -444,7 +459,9 @@ USER bin`
 	})
 
 	It("podman run device-read-iops test", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 
 		cgroupsv2, err := cgroups.IsCgroup2UnifiedMode()
 		Expect(err).To(BeNil())
@@ -465,7 +482,9 @@ USER bin`
 	})
 
 	It("podman run device-write-iops test", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 
 		cgroupsv2, err := cgroups.IsCgroup2UnifiedMode()
 		Expect(err).To(BeNil())
@@ -586,7 +605,9 @@ USER bin`
 	})
 
 	It("podman run with FIPS mode secrets", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		fipsFile := "/etc/system-fips"
 		err = ioutil.WriteFile(fipsFile, []byte{}, 0755)
 		Expect(err).To(BeNil())
@@ -601,7 +622,9 @@ USER bin`
 	})
 
 	It("podman run without group-add", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--rm", ALPINE, "id"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -609,7 +632,9 @@ USER bin`
 	})
 
 	It("podman run with group-add", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--rm", "--group-add=audio", "--group-add=nogroup", "--group-add=777", ALPINE, "id"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -617,7 +642,9 @@ USER bin`
 	})
 
 	It("podman run with user (default)", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--rm", ALPINE, "id"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -632,7 +659,9 @@ USER bin`
 	})
 
 	It("podman run with user (integer, in /etc/passwd)", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--rm", "--user=8", ALPINE, "id"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -640,7 +669,9 @@ USER bin`
 	})
 
 	It("podman run with user (username)", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--rm", "--user=mail", ALPINE, "id"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -848,7 +879,9 @@ USER mail`
 	})
 
 	It("podman run --mount type=bind,bind-nonrecursive", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--mount", "type=bind,bind-nonrecursive,slave,src=/,target=/host", fedoraMinimal, "findmnt", "-nR", "/host"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -856,7 +889,9 @@ USER mail`
 	})
 
 	It("podman run --mount type=devpts,target=/foo/bar", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--mount", "type=devpts,target=/foo/bar", fedoraMinimal, "stat", "-f", "-c%T", "/foo/bar"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -1010,7 +1045,9 @@ USER mail`
 
 	It("podman run with cgroups=disabled runs without cgroups", func() {
 		SkipIfRemote()
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		// Only works on crun
 		if !strings.Contains(podmanTest.OCIRuntime, "crun") {
 			Skip("Test only works on crun")
@@ -1043,7 +1080,9 @@ USER mail`
 
 	It("podman run with cgroups=enabled makes cgroups", func() {
 		SkipIfRemote()
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		// Only works on crun
 		if !strings.Contains(podmanTest.OCIRuntime, "crun") {
 			Skip("Test only works on crun")
@@ -1086,7 +1125,9 @@ USER mail`
 	})
 
 	It("podman run --device-cgroup-rule", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		deviceCgroupRule := "c 42:* rwm"
 		session := podmanTest.Podman([]string{"run", "--name", "test", "-d", "--device-cgroup-rule", deviceCgroupRule, ALPINE, "top"})
 		session.WaitWithDefaultTimeout()

@@ -7,6 +7,7 @@ load helpers
 
 @test "podman pause/unpause" {
     skip_if_rootless "pause does not work rootless"
+    echo "I AM NOT ROOT BUT I AM STILL RUNNING"
 
     cname=$(random_string 10)
     run_podman run -d --name $cname $IMAGE \

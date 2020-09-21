@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 
 	. "github.com/containers/podman/v2/test/utils"
@@ -110,7 +111,9 @@ var _ = Describe("Podman run", func() {
 	})
 
 	It("podman test selinux label /run/secrets", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", fedoraMinimal, "ls", "-dZ", "/run/secrets"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))
@@ -143,7 +146,9 @@ var _ = Describe("Podman run", func() {
 	})
 
 	It("podman test selinux --privileged label /run/secrets", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		session := podmanTest.Podman([]string{"run", "--privileged", fedoraMinimal, "ls", "-dZ", "/run/secrets"})
 		session.WaitWithDefaultTimeout()
 		Expect(session.ExitCode()).To(Equal(0))

@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 
 	. "github.com/containers/podman/v2/test/utils"
@@ -18,7 +19,9 @@ var _ = Describe("Podman mount", func() {
 	)
 
 	BeforeEach(func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		tempdir, err = CreateTempDirInTempDir()
 		if err != nil {
 			os.Exit(1)
@@ -189,7 +192,9 @@ var _ = Describe("Podman mount", func() {
 	})
 
 	It("podman list running container", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 
 		setup := podmanTest.Podman([]string{"run", "-dt", ALPINE, "top"})
 		setup.WaitWithDefaultTimeout()
@@ -212,7 +217,9 @@ var _ = Describe("Podman mount", func() {
 	})
 
 	It("podman list multiple mounted containers", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 
 		setup := podmanTest.Podman([]string{"create", ALPINE, "ls"})
 		setup.WaitWithDefaultTimeout()
@@ -257,7 +264,9 @@ var _ = Describe("Podman mount", func() {
 	})
 
 	It("podman list mounted container", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 
 		setup := podmanTest.Podman([]string{"create", ALPINE, "ls"})
 		setup.WaitWithDefaultTimeout()

@@ -240,10 +240,14 @@ func buildDefaultReporter() Reporter {
 
 //Skip notifies Ginkgo that the current spec was skipped.
 func Skip(message string, callerSkip ...int) {
+	fmt.Println("Entered fn Skip()")
 	skip := 0
+	fmt.Println("skip value is 0")
 	if len(callerSkip) > 0 {
 		skip = callerSkip[0]
+		fmt.Printf("skip value inside if condition is %d\n", skip)
 	}
+	fmt.Printf("skip value after if condition is %d\n", skip)
 
 	global.Failer.Skip(message, codelocation.New(skip+1))
 	panic(GINKGO_PANIC)

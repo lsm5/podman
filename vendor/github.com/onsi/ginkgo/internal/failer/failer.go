@@ -79,14 +79,21 @@ func (f *Failer) Drain(componentType types.SpecComponentType, componentIndex int
 }
 
 func (f *Failer) Skip(message string, location types.CodeLocation) {
+	fmt.Println("Entered failer.Skip")
+	fmt.Println("Running f.lock.Lock")
 	f.lock.Lock()
+	fmt.Println("Ran f.lock.Lock")
 	defer f.lock.Unlock()
 
+	fmt.Println("Checking f.state value")
 	if f.state == types.SpecStatePassed {
+		fmt.Println("f.state IS EQUAL TO types.SpecStatePassed")
 		f.state = types.SpecStateSkipped
+		fmt.Println("Assigned types.SpecStateSkipped to f.state")
 		f.failure = types.SpecFailure{
 			Message:  message,
 			Location: location,
 		}
 	}
+	fmt.Println("EXITING failer.Skip")
 }

@@ -6,6 +6,7 @@ load helpers
 @test "podman mount - basic test" {
     # Only works with root (FIXME: does it work with rootless + vfs?)
     skip_if_rootless "mount does not work rootless"
+    echo "I AM NOT ROOT BUT I AM STILL RUNNING"
     skip_if_remote "mounting remote is meaningless"
 
     f_path=/tmp/tmpfile_$(random_string 8)

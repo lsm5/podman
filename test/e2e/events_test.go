@@ -43,6 +43,7 @@ var _ = Describe("Podman events", func() {
 	// These tests are only known to work on Fedora ATM.  Other distributions
 	// will be skipped.
 	It("podman events", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		_, ec, _ := podmanTest.RunLsContainer("")
@@ -53,6 +54,7 @@ var _ = Describe("Podman events", func() {
 	})
 
 	It("podman events with an event filter", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		_, ec, _ := podmanTest.RunLsContainer("")
@@ -65,6 +67,7 @@ var _ = Describe("Podman events", func() {
 
 	It("podman events with an event filter and container=cid", func() {
 		Skip("Does not work on v2")
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		_, ec, cid := podmanTest.RunLsContainer("")
@@ -80,6 +83,7 @@ var _ = Describe("Podman events", func() {
 	})
 
 	It("podman events with a type and filter container=id", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		_, ec, cid := podmanTest.RunLsContainer("")
@@ -91,6 +95,7 @@ var _ = Describe("Podman events", func() {
 	})
 
 	It("podman events with a type", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		setup := podmanTest.Podman([]string{"run", "-dt", "--pod", "new:foobarpod", ALPINE, "top"})
@@ -107,6 +112,7 @@ var _ = Describe("Podman events", func() {
 	})
 
 	It("podman events --since", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		_, ec, _ := podmanTest.RunLsContainer("")
@@ -117,6 +123,7 @@ var _ = Describe("Podman events", func() {
 	})
 
 	It("podman events --until", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		_, ec, _ := podmanTest.RunLsContainer("")
@@ -130,6 +137,7 @@ var _ = Describe("Podman events", func() {
 	})
 
 	It("podman events format", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
 		SkipIfNotFedora()
 		_, ec, _ := podmanTest.RunLsContainer("")

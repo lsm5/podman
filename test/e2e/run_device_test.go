@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 
 	. "github.com/containers/podman/v2/test/utils"
@@ -72,7 +73,9 @@ var _ = Describe("Podman run device", func() {
 	})
 
 	It("podman run device host device and container device parameter are directories", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		Expect(os.MkdirAll("/dev/foodevdir", os.ModePerm)).To(BeNil())
 		defer os.RemoveAll("/dev/foodevdir")
 

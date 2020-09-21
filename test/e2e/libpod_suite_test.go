@@ -17,6 +17,7 @@ func SkipIfRemote() {
 
 func SkipIfRootless() {
 	if os.Geteuid() != 0 {
+		fmt.Printf("I AM NOT ROOT\n")
 		Skip("This function is not enabled for rootless podman")
 	}
 }

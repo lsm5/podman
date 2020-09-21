@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -37,21 +38,27 @@ var _ = Describe("Podman create with --ip flag", func() {
 	})
 
 	It("Podman create --ip with garbage address", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		result := podmanTest.Podman([]string{"create", "--name", "test", "--ip", "114232346", ALPINE, "ls"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).To(ExitWithError())
 	})
 
 	It("Podman create --ip with v6 address", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		result := podmanTest.Podman([]string{"create", "--name", "test", "--ip", "2001:db8:bad:beef::1", ALPINE, "ls"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).To(ExitWithError())
 	})
 
 	It("Podman create --ip with non-allocatable IP", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		result := podmanTest.Podman([]string{"create", "--name", "test", "--ip", "203.0.113.124", ALPINE, "ls"})
 		result.WaitWithDefaultTimeout()
 		Expect(result.ExitCode()).To(Equal(0))
@@ -83,7 +90,9 @@ var _ = Describe("Podman create with --ip flag", func() {
 	})
 
 	It("Podman create two containers with the same IP", func() {
+		fmt.Printf("My UID before SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		SkipIfRootless()
+		fmt.Printf("My UID after SkipIfRootless is %d!!!!!!!!!!!!!\n", os.Geteuid())
 		ip := GetRandomIPAddress()
 		result := podmanTest.Podman([]string{"create", "--name", "test1", "--ip", ip, ALPINE, "sleep", "999"})
 		result.WaitWithDefaultTimeout()

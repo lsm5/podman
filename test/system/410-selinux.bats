@@ -42,12 +42,14 @@ function check_label() {
 
 @test "podman selinux: container with label=disable" {
     skip_if_rootless
+    echo "I AM NOT ROOT BUT I AM STILL RUNNING"
 
     check_label "--security-opt label=disable" "spc_t"
 }
 
 @test "podman selinux: privileged container" {
     skip_if_rootless
+    echo "I AM NOT ROOT BUT I AM STILL RUNNING"
 
     check_label "--privileged --userns=host" "spc_t"
 }

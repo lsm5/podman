@@ -8,6 +8,7 @@ load helpers
 
 @test "podman container storage is not accessible by unprivileged users" {
     skip_if_rootless "test meaningless without suid"
+    echo "I AM NOT ROOT BUT I AM STILL RUNNING"
     skip_if_remote
 
     run_podman run --name c_uidmap   --uidmap 0:10000:10000 $IMAGE true

@@ -260,7 +260,9 @@ function _add_label_if_missing() {
 #  skip_if_rootless  #  ...with an optional message
 ######################
 function skip_if_rootless() {
+    echo "INSIDE skip_if_rootless"
     if is_rootless; then
+        echo "I AM NOT ROOT"
         local msg=$(_add_label_if_missing "$1" "rootless")
         skip "${msg:-not applicable under rootless podman}"
     fi
