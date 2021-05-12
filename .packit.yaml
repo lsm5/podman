@@ -1,0 +1,10 @@
+patch_generation_ignore_paths:
+- .distro
+sources:
+- path: dnsname-c654c95.tar.gz
+  url: https://src.fedoraproject.org/repo/pkgs/podman/dnsname-c654c95.tar.gz/sha512/34c844ca3ebe24b069077836d27e828ebbfd61c13e0aa943838af9aae475258c3f02e7d1c5e61362cb6904287eee4e3fc85cc2879216e1a8e1142b69731926f0/dnsname-c654c95.tar.gz
+- path: podman-59dd357.tar.gz
+  url: https://src.fedoraproject.org/repo/pkgs/podman/podman-59dd357.tar.gz/sha512/39c48b9eb9d947d21c83e2337ef41a4e56223dd86802dc95581e2ae5f5d761f56e4ddd1f4cad6b8d3d3c9ae3fdecafdd687d9c593d34da105d62e4a7269461f4/podman-59dd357.tar.gz
+specfile_path: .distro/podman.spec
+upstream_project_url: https://github.com/containers/podman
+upstream_ref: 59dd35750931547c66e34e999ab960c90f18f510
