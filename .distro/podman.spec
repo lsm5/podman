@@ -58,7 +58,7 @@ Version: 3.2.0
 # N.foo if released, 0.N.foo if unreleased
 # Rawhide almost always ships unreleased builds,
 # so release tag should be of the form 0.N.foo
-Release: 0.18.dev.git%{shortcommit0}%{?dist}
+Release: 0.18.gba98adf7%{?dist}
 Summary: Manage Pods, Containers and Container Images
 License: ASL 2.0
 URL: https://%{name}.io/
@@ -93,6 +93,14 @@ Requires: iptables
 Requires: nftables
 Recommends: %{name}-plugins = %{epoch}:%{version}-%{release}
 Recommends: catatonit
+
+# fix incorrect log driver in podman container image
+# Author: Paul Holzinger <paul.holzinger@web.de>
+Patch0001: 0001-fix-incorrect-log-driver-in-podman-container-image.patch
+
+# fix network restart always test
+# Author: Paul Holzinger <paul.holzinger@web.de>
+Patch0002: 0002-fix-network-restart-always-test.patch
 
 # vendored libraries
 # awk '{print "Provides: bundled(golang("$1")) = "$2}' go.mod | sort
@@ -620,6 +628,9 @@ exit 0
 
 # rhcontainerbot account currently managed by lsm5
 %changelog
+* Wed May 12 2021 Lokesh Mandvekar <lsm5@fedoraproject.org> - 3:3.2.0-0.18.gba98adf7
+- Downstream changes (ba98adf7)
+
 * Wed May 12 2021 RH Container Bot <rhcontainerbot@fedoraproject.org> - 3:3.2.0-0.18.dev.git59dd357
 - autobuilt 59dd357
 
