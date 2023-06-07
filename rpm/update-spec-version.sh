@@ -4,7 +4,7 @@
 # default. Useful for local manual rpm builds where the Version needs to be set
 # correctly.
 
-set -e
+set -eo pipefail
 
 # Script is run from git root directory
 SPEC_FILE=rpm/podman.spec

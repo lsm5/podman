@@ -1,6 +1,6 @@
 .PHONY: rpm
 rpm:
-	$(shell /usr/bin/bash ./update-spec-version.sh)
+	$(shell /usr/bin/bash rpm/update-spec-version.sh)
 	spectool -g podman.spec
 	rpmbuild -ba \
 		--define '_sourcedir $(shell pwd)' \

@@ -780,8 +780,8 @@ win-gvproxy: test/version/version
 	cp tmp-gv/bin/gvproxy.exe bin/windows/
 	rm -rf tmp-gv
 
-.PHONY: package
-package:  ## Build rpm packages
+.PHONY: local-rpm
+local-rpm:  ## Build local rpm packages
 	$(MAKE) -C rpm
 
 ###
