@@ -96,7 +96,7 @@ Epoch: 5
 # If that's what you're reading, Version must be 0, and will be updated by Packit for
 # copr and koji builds.
 # If you're reading this on dist-git, the version is automatically filled in by Packit.
-Version: 0
+Version: 4.5.0~rc1~699~g825956f59
 License: Apache-2.0 and BSD-2-Clause and BSD-3-Clause and ISC and MIT and MPL-2.0
 Release: %autorelease
 %if %{with golang_arches_future}

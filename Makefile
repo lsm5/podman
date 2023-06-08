@@ -782,7 +782,14 @@ win-gvproxy: test/version/version
 
 .PHONY: local-rpm
 local-rpm:  ## Build local rpm packages
-	$(MAKE) -C rpm
+	$(shell $(SHELL) $(shell pwd)/rpm/update-spec-version.sh)
+	spectool -g rpm/podman.spec
+	rpmbuild -ba \
+		--define '_sourcedir $(shell pwd)/rpm' \
+		--define '_rpmdir %{_sourcedir}/RPMS' \
+		--define '_srcrpmdir %{_sourcedir}/SRPMS' \
+		--define '_builddir %{_sourcedir}/BUILD' \
+		$(shell pwd)/rpm/podman.spec
 
 ###
 ### Installation targets
