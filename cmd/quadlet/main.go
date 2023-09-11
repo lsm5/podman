@@ -133,6 +133,8 @@ func getUnitDirs(rootless bool) []string {
 		dirs = appendSubPaths(dirs, path.Join(configDir, "containers/systemd"), false, nil)
 		u, err := user.Current()
 		if err == nil {
+			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "groups"), true, nonNumericFilter)
+			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "groups", u.Gid), true, nonNumericFilter)
 			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "users"), true, nonNumericFilter)
 			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "users", u.Uid), true, userLevelFilter)
 		} else {
@@ -165,12 +167,25 @@ func appendSubPaths(dirs []string, path string, isUserFlag bool, filterPtr func(
 func nonNumericFilter(_path string, isUserFlag bool) bool {
 	// when running in rootless, recursive walk directories that are non numeric
 	// ignore sub dirs under the `users` directory which correspond to a user id
-	if strings.Contains(_path, filepath.Join(quadlet.UnitDirAdmin, "users")) {
+	if strings.Contains(_path, filepath.Join(quadlet.UnitDirAdmin, "users")) || strings.Contains(_path, filepath.Join(quadlet.UnitDirAdmin, "groups")) {
 		listDirUserPathLevels := strings.Split(_path, string(os.PathSeparator))
 		if len(listDirUserPathLevels) > SystemUserDirLevel {
 			if !(regexp.MustCompile(`^[0-9]*$`).MatchString(listDirUserPathLevels[SystemUserDirLevel])) {
 				return true
 			}
+		}
+	} else {
+		return true
+	}
+	return false
+}
+
+func groupLevelFilter(_path string, isGroupFlag bool) bool {
+	// if quadlet generator is run rootless, do not recurse other group sub dirs
+	// if quadlet generator is run as root, ignore groups sub dirs
+	if strings.Contains(_path, filepath.Join(quadlet.UnitDirAdmin, "groups")) {
+		if isGroupFlag {
+			return true
 		}
 	} else {
 		return true
