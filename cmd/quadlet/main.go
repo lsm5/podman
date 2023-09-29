@@ -134,7 +134,7 @@ func getUnitDirs(rootless bool) []string {
 		u, err := user.Current()
 		if err == nil {
 			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "groups"), true, nonNumericFilter)
-			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "groups", u.Gid), true, nonNumericFilter)
+			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "groups", u.Gid), true, groupLevelFilter)
 			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "users"), true, nonNumericFilter)
 			dirs = appendSubPaths(dirs, filepath.Join(quadlet.UnitDirAdmin, "users", u.Uid), true, userLevelFilter)
 		} else {
