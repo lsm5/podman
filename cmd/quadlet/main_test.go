@@ -61,6 +61,7 @@ func TestUnitDirs(t *testing.T) {
 	rootlessDirs := []string{}
 
 	rootlessDirs = appendSubPaths(rootlessDirs, path.Join(configDir, "containers/systemd"), false, nil)
+	rootlessDirs = appendSubPaths(rootlessDirs, filepath.Join(quadlet.UnitDirAdmin, "groups", u.Gid), true, groupLevelFilter)
 	rootlessDirs = appendSubPaths(rootlessDirs, filepath.Join(quadlet.UnitDirAdmin, "users"), true, nonNumericFilter)
 	rootlessDirs = appendSubPaths(rootlessDirs, filepath.Join(quadlet.UnitDirAdmin, "users", u.Uid), true, userLevelFilter)
 	rootlessDirs = append(rootlessDirs, filepath.Join(quadlet.UnitDirAdmin, "users"))
