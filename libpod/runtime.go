@@ -393,6 +393,13 @@ func makeRuntime(runtime *Runtime) (retErr error) {
 	runtime.mergeDBConfig(dbConfig)
 
 	unified, _ := cgroups.IsCgroup2UnifiedMode()
+	if !unified {
+		_, ok := os.LookupEnv("IGNORE_CGROUPSV1_WARNING")
+		if !ok {
+			logrus.Warn("Using cgroups-v1 which is deprecated in favor of cgroups-v2 with Podman v5 and will be removed in a future version. Set environment variable `IGNORE_CGROUPSV1_WARNING` to hide this warning.")
+		}
+	}
+
 	if unified && rootless.IsRootless() && !systemd.IsSystemdSessionValid(rootless.GetRootlessUID()) {
 		// If user is rootless and XDG_RUNTIME_DIR is found, podman will not proceed with /tmp directory
 		// it will try to use existing XDG_RUNTIME_DIR
