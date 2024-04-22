@@ -71,7 +71,7 @@ function CheckCommand() {
 
 function CheckRequirements() {
     CheckCommand "gcc" "MingW CC"
-    CheckCommand "candle" "WiX Toolset"
+    CheckCommand "wix" "WiX Toolset"
     CheckCommand "go" "Golang"
 }
 
@@ -98,8 +98,9 @@ if ($args.Count -lt 1 -or $args[0].Length -lt 1) {
     Exit 1
 }
 
-# Pre-set to standard locations in-case build env does not refresh paths
-$Env:Path="$Env:Path;C:\Program Files (x86)\WiX Toolset v3.14\bin;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin"
+# Pre-set to standard locations in-case build env does not refresh paths.
+# WiX is in the default path in the windows image used, so we don't need to specify it explicitly here.
+$Env:Path="$Env:Path;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin"
 
 CheckRequirements
 

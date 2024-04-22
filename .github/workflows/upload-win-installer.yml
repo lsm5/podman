@@ -38,6 +38,8 @@ jobs:
     - name: Dry Run Status
       run: |
         Write-Output "::notice::This workflow execution will be a dry-run: ${{ steps.actual_dryrun.outputs.dryrun }}"
+    - name: Install Wix
+      run: dotnet tool install --global wix
     - name: Determine version
       id: getversion
       run: |
