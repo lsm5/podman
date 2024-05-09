@@ -69,9 +69,15 @@ function CheckCommand() {
     }
 }
 
+# Needed to run the `heat` command
+pushd ..\..
+& 'C:\Program Files\dotnet\dotnet.exe' add package WixToolset.Heat
+popd
+
 function CheckRequirements() {
     CheckCommand "gcc" "MingW CC"
     CheckCommand "wix" "WiX Toolset"
+    CheckCommand "heat" "WixToolset.Heat"
     CheckCommand "go" "Golang"
 }
 
