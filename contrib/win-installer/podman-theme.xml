@@ -1,8 +1,7 @@
-<?xml version="1.0" encoding="utf-8"?>
 <!-- Copyright (c) .NET Foundation and contributors. All rights reserved. Licensed under the Microsoft Reciprocal License. -->
 
 
-<Theme xmlns="http://wixtoolset.org/schemas/thmutil/2010">
+<Theme xmlns="http://wixtoolset.org/schemas/v4/thmutil">
   <Window Width="600" Height="450" HexStyle="100a0000" FontId="0">#(loc.Title) Setup</Window>
   <Font Id="0" Height="-12" Weight="500" Foreground="000000" Background="FFFFFF">Segoe UI</Font>
   <Font Id="1" Height="-24" Weight="500" Foreground="000000">Segoe UI</Font>
@@ -15,13 +14,13 @@
   <Font Id="7" Height="-24" Weight="500" Foreground="000000" Background="E0E0E0">Segoe UI</Font>
   <Text X="11" Y="-45" Width="-11" Height="2" FontId="7" Visible="yes"></Text>
   <Page Name="Help">
-    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png"/>
+    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png" />
     <Text X="11" Y="80" Width="-11" Height="32" FontId="2" DisablePrefix="yes">#(loc.HelpHeader)</Text>
     <Text X="11" Y="121" Width="-11" Height="-35" FontId="3" DisablePrefix="yes">#(loc.HelpText)</Text>
     <Button Name="HelpCancelButton" X="-11" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">#(loc.HelpCloseButton)</Button>
   </Page>
   <Page Name="Install">
-    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png"/>
+    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png" />
     <Text X="185" Y="11" Width="-11" Height="40" FontId="5" DisablePrefix="yes">#(loc.InstallHeader)</Text>
     <Text X="185" Y="82" Width="-11" Height="160" FontId="3" DisablePrefix="yes">#(loc.InstallMessage)</Text><!-- HexStyle="0x800000" -->
 
@@ -33,7 +32,7 @@
     <Button Name="WelcomeCancelButton" X="-11" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">#(loc.InstallCloseButton)</Button>
   </Page>
   <Page Name="Options">
-    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png"/>
+    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png" />
     <Text X="11" Y="80" Width="-11" Height="30" FontId="2" DisablePrefix="yes">#(loc.OptionsHeader)</Text>
     <Text X="11" Y="121" Width="-11" Height="17" FontId="3">#(loc.OptionsLocationLabel)</Text>
     <Editbox Name="FolderEditbox" X="11" Y="143" Width="-91" Height="21" TabStop="yes" FontId="3" FileSystemAutoComplete="yes" />
@@ -43,7 +42,7 @@
     <Button Name="OptionsCancelButton" X="-11" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">#(loc.OptionsCancelButton)</Button>
   </Page>
   <Page Name="FilesInUse">
-    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png"/>
+    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png" />
     <Text X="11" Y="80" Width="-11" Height="30" FontId="2" DisablePrefix="yes">#(loc.FilesInUseHeader)</Text>
     <Text X="11" Y="121" Width="-11" Height="34" FontId="3" DisablePrefix="yes">#(loc.FilesInUseLabel)</Text>
     <Text Name="FilesInUseText" X="11" Y="150" Width="-11" Height="-86" FontId="3" DisablePrefix="yes" HexStyle="0x0000000C"></Text>
@@ -55,7 +54,7 @@
     <Button Name="FilesInUseCancelButton" X="-11" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">#(loc.FilesInUseCancelButton)</Button>
   </Page>
   <Page Name="Progress">
-    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png"/>
+    <Image X="11" Y="11" Width="206" Height="64" ImageFile="logo.png" />
     <Text X="11" Y="80" Width="-11" Height="30" FontId="2" DisablePrefix="yes">#(loc.ProgressHeader)</Text>
     <Text X="11" Y="141" Width="70" Height="17" FontId="3" DisablePrefix="yes">#(loc.ProgressLabel)</Text>
     <Text Name="OverallProgressPackageText" X="85" Y="141" Width="-11" Height="17" FontId="3" DisablePrefix="yes">#(loc.OverallProgressPackageText)</Text>
@@ -64,7 +63,7 @@
   </Page>
   <Page Name="Modify">
     <Text X="185" Y="11" Width="-11" Height="32" FontId="1" DisablePrefix="yes">#(loc.Title)</Text>
-    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png"/>
+    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png" />
     <Text X="185" Y="50" Width="-11" Height="30" FontId="2" DisablePrefix="yes">#(loc.ModifyHeader)</Text>
     <Button Name="RepairButton" X="-171" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.ModifyRepairButton)</Button>
     <Button Name="UninstallButton" X="-91" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">#(loc.ModifyUninstallButton)</Button>
@@ -72,7 +71,7 @@
   </Page>
   <Page Name="Success">
     <Text X="185" Y="11" Width="-11" Height="32" FontId="1" DisablePrefix="yes">#(loc.Title)</Text>
-    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png"/>
+    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png" />
     <Text Name="SuccessHeader" X="185" Y="50" Width="-11" Height="30" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.SuccessHeader)</Text>
     <Text Name="SuccessInstallHeader" X="185" Y="50" Width="-11" Height="100" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.SuccessInstallHeader)</Text>
     <Text Name="SuccessRepairHeader" X="185" Y="50" Width="-11" Height="100" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.SuccessRepairHeader)</Text>
@@ -83,7 +82,7 @@
     <Button Name="SuccessCancelButton" X="-11" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">#(loc.SuccessCloseButton)</Button>
   </Page>
   <Page Name="Failure">
-    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png"/>
+    <Image X="11" Y="11" Width="165" Height="364" ImageFile="logoside.png" />
     <Text Name="FailureHeader" X="185" Y="50" Width="-11" Height="30" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.FailureHeader)</Text>
     <Text Name="FailureInstallHeader" X="185" Y="50" Width="-11" Height="30" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.FailureInstallHeader)</Text>
     <Text Name="FailureUninstallHeader" X="185" Y="50" Width="-11" Height="30" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.FailureUninstallHeader)</Text>

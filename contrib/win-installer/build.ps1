@@ -71,7 +71,7 @@ function CheckCommand() {
 
 function CheckRequirements() {
     CheckCommand "gcc" "MingW CC"
-    CheckCommand "candle" "WiX Toolset"
+    CheckCommand "wix" "WiX Toolset"
     CheckCommand "go" "Golang"
 }
 
@@ -99,7 +99,7 @@ if ($args.Count -lt 1 -or $args[0].Length -lt 1) {
 }
 
 # Pre-set to standard locations in-case build env does not refresh paths
-$Env:Path="$Env:Path;C:\Program Files (x86)\WiX Toolset v3.14\bin;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin"
+$Env:Path="$Env:Path;C:\Users\micro\mingw64\bin;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin"
 
 CheckRequirements
 
@@ -151,7 +151,7 @@ if ($gvExists) {
 # } else {
 #     $env:IncludePolicyJSON = "Skip"
 # }
-.\build-msi.bat $ENV:INSTVER; ExitOnError
+dotnet build podman.wixproj --property:VERSION=$ENV:INSTVER -o .; ExitOnError
 SignItem @("podman.msi")
 
 .\build-burn.bat $ENV:INSTVER; ExitOnError
