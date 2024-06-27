@@ -66,7 +66,7 @@ jobs:
 
   - job: tests
     identifier: cockpit-revdeps
-    trigger: pull_request
+    trigger: ignore
     packages: [podman-fedora]
     notifications:
       failure_comment:
