@@ -1,7 +1,7 @@
 <Project Sdk="WixToolset.Sdk/5.0.0">
 	<PropertyGroup>
-		<DefineConstants>VERSION=$(VERSION)</DefineConstants>
 		<InstallerPlatform>x64</InstallerPlatform>
+		<EnableDefaultCompileItems>false</EnableDefaultCompileItems>
 	</PropertyGroup>
 	<ItemGroup>
 		<HarvestDirectory Include="docs">
@@ -10,16 +10,12 @@
 			<SuppressRootDirectory>true</SuppressRootDirectory>
 		</HarvestDirectory>
 		<BindPath Include="docs" />
+		<Compile Include="podman.wxs;podman-ui.wxs;welcome-install-dlg.wxs" />
 	</ItemGroup>
 	<ItemGroup>
 		<PackageReference Include="PanelSwWixExtension4" Version="5.1.1.375" />
-		<PackageReference Include="WixToolset.Bal.wixext" Version="5.0.0" />
-		<PackageReference Include="WixToolset.BootstrapperApplicationApi" Version="5.0.0" />
-		<PackageReference Include="WixToolset.BootstrapperExtensionApi" Version="5.0.0" />
 		<PackageReference Include="WixToolset.Heat" Version="5.0.0" />
-		<PackageReference Include="WixToolset.Iis.wixext" Version="5.0.0" />
 		<PackageReference Include="WixToolset.UI.wixext" Version="5.0.0" />
 		<PackageReference Include="WixToolset.Util.wixext" Version="5.0.0" />
-		<PackageReference Include="WixToolset.WixStandardBootstrapperApplicationFunctionApi" Version="5.0.0" />
 	 </ItemGroup>
 </Project>

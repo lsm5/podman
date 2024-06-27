@@ -151,16 +151,18 @@ if ($gvExists) {
 # } else {
 #     $env:IncludePolicyJSON = "Skip"
 # }
-& 'C:\Program Files\dotnet\dotnet.exe' build podman.wixproj --property:VERSION=$ENV:INSTVER -o .; ExitOnError
-Move-Item -Path .\en-US\podman.msi -Destination .\podman.msi
-SignItem @("podman.msi")
+if (Test-Path ./obj) {
+    Remove-Item ./obj -Recurse -Force -Confirm:$false
+}
+& 'C:\Program Files\dotnet\dotnet.exe' build podman.wixproj /property:DefineConstants="VERSION=$ENV:INSTVER" -o .; ExitOnError
+SignItem @("en-US\podman.msi")
 
-.\build-burn.bat $ENV:INSTVER; ExitOnError
-insignia -ib podman-setup.exe -o engine.exe; ExitOnError
+dotnet build podman-setup.wixproj /property:DefineConstants="VERSION=$ENV:INSTVER" -o .; ExitOnError
+wix burn detach podman-setup.exe -engine engine.exe; ExitOnError
 SignItem @("engine.exe")
 
 $file = "podman-$version$suffix-setup.exe"
-insignia -ab engine.exe podman-setup.exe -o $file; ExitOnError
+wix burn reattach -engine engine.exe podman-setup.exe -o $file; ExitOnError
 SignItem @("$file")
 
 if (Test-Path -Path shasums) {

@@ -12,7 +12,7 @@
 
 	<Package Name="podman" Manufacturer="Red Hat Inc." Version="$(VERSION)" UpgradeCode="a6a9dd9c-0732-44ba-9279-ffe22ea50671">
 		<Media Id="1" Cabinet="Podman.cab" EmbedCab="yes" />
-		<MajorUpgrade DowngradeErrorMessage="!(loc.DowngradeError)" />
+		<MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
 		<Property Id="DiskPrompt" Value="Red Hat's Podman $(VERSION) Installation" />
 		<Property Id="MACHINE_PROVIDER" Value="wsl" />
 		<Property Id="MACHINE_PROVIDER_CONFIG_FILE_PATH">
