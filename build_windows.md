@@ -10,7 +10,7 @@ Windows.
   - [OS requirements](#os-requirements)
   - [Git and go](#git-and-go)
   - [Pandoc](#pandoc)
-  - [.NET SDK](#.net-sdk)
+  - [.NET SDK](#net-sdk)
   - [Virtualization Provider](#virtualization-provider)
     - [WSL](#wsl)
     - [Hyper-V](#hyper-v)
