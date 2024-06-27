@@ -129,7 +129,7 @@ if ($ENV:INSTVER -eq "") {
     Exit 1
 }
 
-FetchPanel
+#FetchPanel
 
 .\build-hooks.bat; ExitOnError
 SignItem @("artifacts/win-sshproxy.exe",
@@ -151,7 +151,8 @@ if ($gvExists) {
 # } else {
 #     $env:IncludePolicyJSON = "Skip"
 # }
-dotnet build podman.wixproj --property:VERSION=$ENV:INSTVER -o .; ExitOnError
+& 'C:\Program Files\dotnet\dotnet.exe' build podman.wixproj --property:VERSION=$ENV:INSTVER -o .; ExitOnError
+Move-Item -Path .\en-US\podman.msi -Destination .\podman.msi
 SignItem @("podman.msi")
 
 .\build-burn.bat $ENV:INSTVER; ExitOnError
