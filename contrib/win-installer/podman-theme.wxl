@@ -28,7 +28,7 @@ Finally, click install to continue, or Close to abort the installation." />
   <String Id="InstallAcceptCheckbox" Value="I &amp;agree to the license terms and conditions" />
   <String Id="InstallOptionsButton" Value="&amp;Options" />
   <String Id="InstallInstallButton" Value="&amp;Install" />
-  <String Id="InstallCloseButton" Value="&amp;Close" />
+  <String Id="InstallCancelButton" Value="&amp;Close" />
   <String Id="OptionsHeader" Value="Setup Options" />
   <String Id="OptionsLocationLabel" Value="Install location:" />
   <String Id="OptionsBrowseButton" Value="&amp;Browse" />
@@ -41,7 +41,7 @@ Finally, click install to continue, or Close to abort the installation." />
   <String Id="ModifyHeader" Value="Modify Setup" />
   <String Id="ModifyRepairButton" Value="&amp;Repair" />
   <String Id="ModifyUninstallButton" Value="&amp;Uninstall" />
-  <String Id="ModifyCloseButton" Value="&amp;Close" />
+  <String Id="ModifyCancelButton" Value="&amp;Close" />
   <String Id="SuccessRepairHeader" Value="Repair Successfully Completed" />
   <String Id="SuccessUninstallHeader" Value="Uninstall Successfully Completed" />
   <String Id="SuccessInstallHeader" Value="Installation Successfully Completed" />
