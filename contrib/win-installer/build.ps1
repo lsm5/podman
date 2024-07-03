@@ -74,7 +74,7 @@ if ($args.Count -lt 1 -or $args[0].Length -lt 1) {
 }
 
 # Pre-set to standard locations in-case build env does not refresh paths
-$Env:Path="$Env:Path;C:\Users\micro\mingw64\bin;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin;C:\Program Files\dotnet"
+$Env:Path="$Env:Path;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin;C:\Program Files\dotnet"
 
 CheckRequirements
 
@@ -95,10 +95,10 @@ if ($args.Count -gt 2) {
 }
 
 .\process-release.ps1 $version $releaseDir
-if ($LASTEXITCODE -eq 2) {
-    Write-Host "Skip signaled, relaying skip"
-    Exit 2
-}
+#if ($LASTEXITCODE -eq 2) {
+#    Write-Host "Skip signaled, relaying skip"
+#    Exit 2
+#}
 if ($ENV:INSTVER -eq "") {
     Write-Host "process-release did not define an install version!"
     Exit 1

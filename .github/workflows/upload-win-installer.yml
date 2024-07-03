@@ -1,6 +1,16 @@
 name: Upload Windows Installer
 
 on:
+  pull_request:
+    branches:
+      - main
+      - wix-test
+    inputs:
+      version:
+        required: true
+      dryrun:
+        required: true
+        default: "true"
   workflow_dispatch:
     inputs:
       version:
@@ -41,7 +51,7 @@ jobs:
     - name: Determine version
       id: getversion
       run: |
-        $version = "${{ inputs.version }}"
+        $version = "v5.2.0"
         if ($version.Length -lt 1) {
           $version = "${{ github.event.release.tag_name }}"
           if ($version.Length -lt 1) {
@@ -78,17 +88,21 @@ jobs:
     # The podman release process requires a cross-compile of the windows binaries be uploaded to
     # the release page as a hard-coded filename.  If non-existent, this workflow will fail in
     # non-obvious ways with a non-obvious error message.  Address that here.
-    - name: Confirm upload_asset_name is non-empty
-      if: ${{ steps.check.outputs.upload_asset_name == '' }}
-      run: |
-          Write-Output "::error::check.ps1 script failed to find manually uploaded podman-remote-release-windows_amd64.zip github release asset for version ${{steps.getversion.outputs.version}}."
-          Exit 1
+    # UNCOMMENT
+    #- name: Confirm upload_asset_name is non-empty
+    #  if: steps.check.outputs.upload_asset_name == '' && github.event_name != 'pull_request'
+    #  run: |
+    #      Write-Output "::error::check.ps1 script failed to find manually uploaded podman-remote-release-windows_amd64.zip github release asset for version ${{steps.getversion.outputs.version}}."
+    #      Exit 1
+    # UNCOMMENT
     - name: Set up Go
       uses: actions/setup-go@v5
       # N/B: already-exists may be an empty-string or "false", handle both cases.
       if: steps.check.outputs.already-exists != 'true' || steps.actual_dryrun.outputs.dryrun == 'true'
       with:
         go-version: stable
+    - name: Set up WiX
+      run: dotnet tool install --global wix
     - name: Setup Signature Tooling
       if: steps.Check.outputs.already-exists != 'true' || steps.actual_dryrun.outputs.dryrun == 'true'
       run: |
@@ -98,20 +112,31 @@ jobs:
           echo "APP_ID=${{secrets.AZ_APP_ID}}" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "TENANT_ID=${{secrets.AZ_TENANT_ID}}" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "CLIENT_SECRET=${{secrets.AZ_CLIENT_SECRET}}" | Out-File -FilePath $env:GITHUB_ENV -Append
+    - name: Pandoc Setup
+      uses: r-lib/actions/setup-pandoc@v2
+      with:
+        pandoc-version: '3.1.11'
     - name: Build
       id: build
-      if: steps.check.outputs.already-exists != 'true' || steps.actual_dryrun.outputs.dryrun == 'true'
+      if: steps.check.outputs.already-exists != 'true' || steps.actual_dryrun.outputs.dryrun == 'true' || github.event_name == 'pull_request'
       run: |
-        Push-Location contrib\win-installer
-        .\build.ps1 ${{steps.getversion.outputs.version}} prod
-        $code = $LASTEXITCODE
-        if ($code -eq 2) {
-          Write-Output "artifact-missing=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Pop-Location
-          Exit 0
-        }
-        Pop-Location
-        Exit $code
+        #Push-Location contrib\win-installer
+        #.\winmake.ps1 installer ${{steps.getversion.outputs.version}}
+        .\winmake.ps1 podman
+        .\winmake.ps1 podman-remote
+        .\winmake.ps1 win-gvproxy
+        .\winmake.ps1 docs
+        .\winmake.ps1 installer
+        #$code = $LASTEXITCODE
+        # UNCOMMENT
+        #if ($code -eq 2) {
+        #  Write-Output "artifact-missing=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        #  Pop-Location
+        #  Exit 0
+        #}
+        # UNCOMMENT
+        #Pop-Location
+        #Exit $code
     - name: Artifact
       if: steps.check.outputs.already-exists != 'true' || steps.actual_dryrun.outputs.dryrun == 'true'
       uses: actions/upload-artifact@v4
