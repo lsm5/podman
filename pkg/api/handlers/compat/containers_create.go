@@ -27,6 +27,7 @@ import (
 	"github.com/containers/podman/v5/pkg/specgen"
 	"github.com/containers/podman/v5/pkg/specgenutil"
 	"github.com/containers/storage"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/docker/docker/api/types/mount"
 )
 
@@ -373,7 +374,17 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 				}
 			}
 
-			networks[netName] = netOpts
+			// Report configuration error in case bridge mode is not used.
+			if !nsmode.IsBridge() && (len(netOpts.Aliases) > 0 || len(netOpts.StaticIPs) > 0 || len(netOpts.StaticMAC) > 0) {
+				return nil, nil, fmt.Errorf("networks and static ip/mac address can only be used with Bridge mode networking")
+			} else if nsmode.IsBridge() {
+				// Docker CLI now always sends the end point config when using the default (bridge) mode
+				// however podman configuration doesn't expect this to define this at all when not in bridge
+				// mode and the podman server config might override the default network mode to something
+				// else than bridge. So adapt to the podman expectation and define custom end point config
+				// only when really using the bridge mode.
+				networks[netName] = netOpts
+			}
 		}
 
 		netInfo.Networks = networks
@@ -441,6 +452,7 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 		ReadOnly:          cc.HostConfig.ReadonlyRootfs,
 		ReadWriteTmpFS:    true, // podman default
 		Rm:                cc.HostConfig.AutoRemove,
+		Annotation:        stringMaptoArray(cc.HostConfig.Annotations),
 		SecurityOpt:       cc.HostConfig.SecurityOpt,
 		StopSignal:        cc.Config.StopSignal,
 		StopTimeout:       rtc.Engine.StopTimeout, // podman default
@@ -516,7 +528,7 @@ func cliOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.C
 			continue
 		}
 		// If volume already exists, there is nothing to do
-		if _, err := os.Stat(vol); err == nil {
+		if err := fileutils.Exists(vol); err == nil {
 			continue
 		}
 		if err := os.MkdirAll(vol, 0o755); err != nil {

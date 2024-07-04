@@ -20,6 +20,7 @@ import (
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/api/handlers/utils/apiutil"
+	"github.com/containers/storage/pkg/fileutils"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/sirupsen/logrus"
@@ -104,14 +105,14 @@ func DefaultSeccompPath() (string, error) {
 		return def.Containers.SeccompProfile, nil
 	}
 
-	_, err = os.Stat(config.SeccompOverridePath)
+	err = fileutils.Exists(config.SeccompOverridePath)
 	if err == nil {
 		return config.SeccompOverridePath, nil
 	}
 	if !os.IsNotExist(err) {
 		return "", err
 	}
-	if _, err := os.Stat(config.SeccompDefaultPath); err != nil {
+	if err := fileutils.Exists(config.SeccompDefaultPath); err != nil {
 		if !os.IsNotExist(err) {
 			return "", err
 		}
@@ -217,7 +218,7 @@ func writeHijackHeader(r *http.Request, conn io.Writer, tty bool) {
 		// Upgraded
 		fmt.Fprintf(conn,
 			"HTTP/1.1 101 UPGRADED\r\nContent-Type: %s\r\nConnection: Upgrade\r\nUpgrade: %s\r\n\r\n",
-			proto, header)
+			header, proto)
 	}
 }
 
@@ -235,8 +236,12 @@ func makeInspectPorts(bindings []types.PortMapping, expose map[uint16][]string) 
 			for i := uint16(0); i < port.Range; i++ {
 				key := fmt.Sprintf("%d/%s", port.ContainerPort+i, protocol)
 				hostPorts := portBindings[key]
+				var hostIP = port.HostIP
+				if len(port.HostIP) == 0 {
+					hostIP = "0.0.0.0"
+				}
 				hostPorts = append(hostPorts, define.InspectHostPort{
-					HostIP:   port.HostIP,
+					HostIP:   hostIP,
 					HostPort: strconv.FormatUint(uint64(port.HostPort+i), 10),
 				})
 				portBindings[key] = hostPorts

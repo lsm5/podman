@@ -1,0 +1,70 @@
+//go:build amd64 || arm64
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/podman/v5/pkg/machine/env"
+	"github.com/containers/podman/v5/pkg/machine/provider"
+	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
+)
+
+func getMachineConn(connectionURI string, parsedConnection *url.URL) (string, error) {
+	machineProvider, err := provider.Get()
+	if err != nil {
+		return "", fmt.Errorf("getting machine provider: %w", err)
+	}
+	dirs, err := env.GetMachineDirs(machineProvider.VMType())
+	if err != nil {
+		return "", err
+	}
+
+	machineList, err := vmconfigs.LoadMachinesInDir(dirs)
+	if err != nil {
+		return "", fmt.Errorf("listing machines: %w", err)
+	}
+
+	// Now we know that the connection points to a machine and we
+	// can find the machine by looking for the one with the
+	// matching port.
+	connectionPort, err := strconv.Atoi(parsedConnection.Port())
+	if err != nil {
+		return "", fmt.Errorf("parsing connection port: %w", err)
+	}
+	for _, mc := range machineList {
+		if connectionPort != mc.SSH.Port {
+			continue
+		}
+
+		state, err := machineProvider.State(mc, false)
+		if err != nil {
+			return "", err
+		}
+
+		if state != define.Running {
+			return "", fmt.Errorf("machine %s is not running but in state %s", mc.Name, state)
+		}
+
+		podmanSocket, podmanPipe, err := mc.ConnectionInfo(machineProvider.VMType())
+		if err != nil {
+			return "", err
+		}
+		if machineProvider.VMType() == define.WSLVirt || machineProvider.VMType() == define.HyperVVirt {
+			if podmanPipe == nil {
+				return "", errors.New("pipe of machine is not set")
+			}
+			return strings.Replace(podmanPipe.Path, `\\.\pipe\`, "npipe:////./pipe/", 1), nil
+		}
+		if podmanSocket == nil {
+			return "", errors.New("socket of machine is not set")
+		}
+		return "unix://" + podmanSocket.Path, nil
+	}
+	return "", fmt.Errorf("could not find a matching machine for connection %q", connectionURI)
+}

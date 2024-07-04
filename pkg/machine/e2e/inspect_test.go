@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"github.com/containers/podman/v5/pkg/machine"
+	"github.com/containers/podman/v5/pkg/machine/define"
 	jsoniter "github.com/json-iterator/go"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -10,17 +11,6 @@ import (
 )
 
 var _ = Describe("podman inspect stop", func() {
-	var (
-		mb      *machineTestBuilder
-		testDir string
-	)
-
-	BeforeEach(func() {
-		testDir, mb = setup()
-	})
-	AfterEach(func() {
-		teardown(originalHomeDir, testDir, mb)
-	})
 
 	It("inspect bad name", func() {
 		i := inspectMachine{}
@@ -32,12 +22,12 @@ var _ = Describe("podman inspect stop", func() {
 
 	It("inspect two machines", func() {
 		i := new(initMachine)
-		foo1, err := mb.setName("foo1").setCmd(i.withImagePath(mb.imagePath)).run()
+		foo1, err := mb.setName("foo1").setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(foo1).To(Exit(0))
 
 		ii := new(initMachine)
-		foo2, err := mb.setName("foo2").setCmd(ii.withImagePath(mb.imagePath)).run()
+		foo2, err := mb.setName("foo2").setCmd(ii.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(foo2).To(Exit(0))
 
@@ -52,7 +42,7 @@ var _ = Describe("podman inspect stop", func() {
 	It("inspect with go format", func() {
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -66,13 +56,12 @@ var _ = Describe("podman inspect stop", func() {
 		err = jsoniter.Unmarshal(inspectSession.Bytes(), &inspectInfo)
 		Expect(err).ToNot(HaveOccurred())
 
-		// TODO Re-enable this for tests once inspect is fixed
-		// switch testProvider.VMType() {
-		// case define.WSLVirt:
-		// 	Expect(inspectInfo[0].ConnectionInfo.PodmanPipe.GetPath()).To(ContainSubstring("podman-"))
-		// default:
-		// 	Expect(inspectInfo[0].ConnectionInfo.PodmanSocket.GetPath()).To(HaveSuffix("podman.sock"))
-		// }
+		switch testProvider.VMType() {
+		case define.HyperVVirt, define.WSLVirt:
+			Expect(inspectInfo[0].ConnectionInfo.PodmanPipe.GetPath()).To(ContainSubstring("podman-"))
+		default:
+			Expect(inspectInfo[0].ConnectionInfo.PodmanSocket.GetPath()).To(HaveSuffix("api.sock"))
+		}
 
 		inspect := new(inspectMachine)
 		inspect = inspect.withFormat("{{.Name}}")
@@ -88,5 +77,32 @@ var _ = Describe("podman inspect stop", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(inspectSession).To(Exit(125))
 		Expect(inspectSession.errorToString()).To(ContainSubstring("can't evaluate field Abcde in type machine.InspectInfo"))
+	})
+
+	It("inspect shows a unique socket name per machine", func() {
+		skipIfVmtype(define.WSLVirt, "test is only relevant for Unix based providers")
+		skipIfVmtype(define.HyperVVirt, "test is only relevant for Unix based machines")
+
+		var socks []string
+		for c := 0; c < 2; c++ {
+			name := randomString()
+			i := new(initMachine)
+			session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(session).To(Exit(0))
+
+			// regular inspect should
+			inspectJSON := new(inspectMachine)
+			inspectSession, err := mb.setName(name).setCmd(inspectJSON).run()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(inspectSession).To(Exit(0))
+
+			var inspectInfo []machine.InspectInfo
+			err = jsoniter.Unmarshal(inspectSession.Bytes(), &inspectInfo)
+			Expect(err).ToNot(HaveOccurred())
+			socks = append(socks, inspectInfo[0].ConnectionInfo.PodmanSocket.GetPath())
+		}
+
+		Expect(socks[0]).ToNot(Equal(socks[1]))
 	})
 })

@@ -17,9 +17,8 @@ function setup_suite() {
     IFS="
  	"
 
-    # Can't use $BATS_SUITE_TMPDIR because podman barfs:
-    #    Error: the specified runroot is longer than 50 characters
-    export PODMAN_LOGIN_WORKDIR=$(mktemp -d --tmpdir=${BATS_TMPDIR:-${TMPDIR:-/tmp}} podman-bats-registry.XXXXXX)
+    export PODMAN_LOGIN_WORKDIR="$BATS_SUITE_TMPDIR/podman-bats-registry"
+    mkdir "$PODMAN_LOGIN_WORKDIR"
 
     export PODMAN_LOGIN_USER="user$(random_string 4)"
     export PODMAN_LOGIN_PASS="pw$(random_string 15)"
@@ -31,9 +30,21 @@ function setup_suite() {
     # The above does not handle errors. Do a final confirmation.
     assert "$PODMAN_LOGIN_REGISTRY_PORT" != "" \
            "Unable to set PODMAN_LOGIN_REGISTRY_PORT"
+
+    clean_setup
 }
 
 # Run at the very end of all tests. Useful for cleanup of non-BATS tmpdirs.
 function teardown_suite() {
     stop_registry
+    local exit_code=$?
+
+    # After all tests make sure there are no leaks and cleanup if there are
+    leak_check
+    if [ $? -gt 0 ]; then
+        exit_code=$((exit_code + 1))
+        clean_setup
+    fi
+
+    return $exit_code
 }

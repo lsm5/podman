@@ -11,6 +11,7 @@ import (
 	"github.com/containers/podman/v5/cmd/podman/registry"
 	"github.com/containers/podman/v5/cmd/podman/utils"
 	"github.com/containers/podman/v5/pkg/domain/entities"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/spf13/cobra"
 )
 
@@ -83,6 +84,7 @@ func generateFlags(cmd *cobra.Command, podmanConfig *entities.PodmanConfig) {
 
 	noTruncAnnotationsFlagName := "no-trunc"
 	flags.BoolVar(&generateOptions.UseLongAnnotations, noTruncAnnotationsFlagName, false, "Don't truncate annotations to Kubernetes length (63 chars)")
+	_ = flags.MarkHidden(noTruncAnnotationsFlagName)
 
 	podmanOnlyFlagName := "podman-only"
 	flags.BoolVar(&generateOptions.PodmanOnly, podmanOnlyFlagName, false, "Add podman-only reserved annotations to the generated YAML file (Cannot be used by Kubernetes)")
@@ -104,7 +106,7 @@ func generateKube(cmd *cobra.Command, args []string) error {
 	}
 
 	if cmd.Flags().Changed("filename") {
-		if _, err := os.Stat(generateFile); err == nil {
+		if err := fileutils.Exists(generateFile); err == nil {
 			return fmt.Errorf("cannot write to %q; file exists", generateFile)
 		}
 		if err := os.WriteFile(generateFile, content, 0644); err != nil {

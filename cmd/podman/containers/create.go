@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -23,7 +24,6 @@ import (
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"golang.org/x/exp/slices"
 	"golang.org/x/term"
 )
 
@@ -142,7 +142,7 @@ func create(cmd *cobra.Command, args []string) error {
 	rawImageName := ""
 	if !cliVals.RootFS {
 		rawImageName = args[0]
-		name, err := PullImage(args[0], &cliVals)
+		name, err := pullImage(cmd, args[0], &cliVals)
 		if err != nil {
 			return err
 		}
@@ -189,7 +189,7 @@ func create(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if cliVals.LogDriver != define.PassthroughLogging {
+	if cliVals.LogDriver != define.PassthroughLogging && cliVals.LogDriver != define.PassthroughTTYLogging {
 		fmt.Println(report.Id)
 	}
 	return nil
@@ -239,10 +239,15 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 
 	if cliVals.LogDriver == define.PassthroughLogging {
 		if term.IsTerminal(0) || term.IsTerminal(1) || term.IsTerminal(2) {
-			return vals, errors.New("the '--log-driver passthrough' option cannot be used on a TTY")
+			return vals, errors.New("the '--log-driver passthrough' option cannot be used on a TTY.  If you really want it, use '--log-driver passthrough-tty'")
 		}
 		if registry.IsRemote() {
 			return vals, errors.New("the '--log-driver passthrough' option is not supported in remote mode")
+		}
+	}
+	if cliVals.LogDriver == define.PassthroughTTYLogging {
+		if registry.IsRemote() {
+			return vals, errors.New("the '--log-driver passthrough-tty' option is not supported in remote mode")
 		}
 	}
 
@@ -331,7 +336,7 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 }
 
 // Pulls image if any also parses and populates OS, Arch and Variant in specified container create options
-func PullImage(imageName string, cliVals *entities.ContainerCreateOptions) (string, error) {
+func pullImage(cmd *cobra.Command, imageName string, cliVals *entities.ContainerCreateOptions) (string, error) {
 	pullPolicy, err := config.ParsePullPolicy(cliVals.Pull)
 	if err != nil {
 		return "", err
@@ -360,7 +365,7 @@ func PullImage(imageName string, cliVals *entities.ContainerCreateOptions) (stri
 		return "unable to obtain decryption config", err
 	}
 
-	pullReport, pullErr := registry.ImageEngine().Pull(registry.GetContext(), imageName, entities.ImagePullOptions{
+	pullOptions := entities.ImagePullOptions{
 		Authfile:         cliVals.Authfile,
 		Quiet:            cliVals.Quiet,
 		Arch:             cliVals.Arch,
@@ -370,7 +375,27 @@ func PullImage(imageName string, cliVals *entities.ContainerCreateOptions) (stri
 		PullPolicy:       pullPolicy,
 		SkipTLSVerify:    skipTLSVerify,
 		OciDecryptConfig: decConfig,
-	})
+	}
+
+	if cmd.Flags().Changed("retry") {
+		retry, err := cmd.Flags().GetUint("retry")
+		if err != nil {
+			return "", err
+		}
+
+		pullOptions.Retry = &retry
+	}
+
+	if cmd.Flags().Changed("retry-delay") {
+		val, err := cmd.Flags().GetString("retry-delay")
+		if err != nil {
+			return "", err
+		}
+
+		pullOptions.RetryDelay = val
+	}
+
+	pullReport, pullErr := registry.ImageEngine().Pull(registry.GetContext(), imageName, pullOptions)
 	if pullErr != nil {
 		return "", pullErr
 	}

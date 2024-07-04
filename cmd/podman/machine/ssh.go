@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/podman/v5/pkg/machine/env"
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/podman/v5/cmd/podman/registry"
@@ -54,7 +55,7 @@ func ssh(cmd *cobra.Command, args []string) error {
 		validVM bool
 	)
 
-	dirs, err := machine.GetMachineDirs(provider.VMType())
+	dirs, err := env.GetMachineDirs(provider.VMType())
 	if err != nil {
 		return err
 	}
@@ -119,7 +120,7 @@ func ssh(cmd *cobra.Command, args []string) error {
 		username = mc.SSH.RemoteUsername
 	}
 
-	err = machine.CommonSSH(username, mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, sshOpts.Args)
+	err = machine.CommonSSHShell(username, mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, sshOpts.Args)
 	return utils.HandleOSExecError(err)
 }
 

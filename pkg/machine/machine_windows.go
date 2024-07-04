@@ -17,14 +17,16 @@ import (
 
 	winio "github.com/Microsoft/go-winio"
 	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/podman/v5/pkg/machine/env"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/sirupsen/logrus"
 )
 
 const (
 	NamedPipePrefix = "npipe:////./pipe/"
 	GlobalNamedPipe = "docker_engine"
-	winSShProxy     = "win-sshproxy.exe"
-	winSshProxyTid  = "win-sshproxy.tid"
+	winSSHProxy     = "win-sshproxy.exe"
+	winSSHProxyTid  = "win-sshproxy.tid"
 	rootfulSock     = "/run/podman/podman.sock"
 	rootlessSock    = "/run/user/1000/podman/podman.sock"
 
@@ -33,7 +35,8 @@ const (
 	GlobalNameWait  = 250 * time.Millisecond
 )
 
-const WM_QUIT = 0x12 //nolint
+//nolint:stylecheck
+const WM_QUIT = 0x12
 
 type WinProxyOpts struct {
 	Name           string
@@ -63,7 +66,7 @@ func PipeNameAvailable(pipeName string, maxWait time.Duration) bool {
 	const interval = 250 * time.Millisecond
 	var wait time.Duration
 	for {
-		_, err := os.Stat(`\\.\pipe\` + pipeName)
+		err := fileutils.Exists(`\\.\pipe\` + pipeName)
 		if errors.Is(err, fs.ErrNotExist) {
 			return true
 		}
@@ -78,7 +81,7 @@ func PipeNameAvailable(pipeName string, maxWait time.Duration) bool {
 func WaitPipeExists(pipeName string, retries int, checkFailure func() error) error {
 	var err error
 	for i := 0; i < retries; i++ {
-		_, err = os.Stat(`\\.\pipe\` + pipeName)
+		err = fileutils.Exists(`\\.\pipe\` + pipeName)
 		if err == nil {
 			break
 		}
@@ -92,7 +95,7 @@ func WaitPipeExists(pipeName string, retries int, checkFailure func() error) err
 }
 
 func DialNamedPipe(ctx context.Context, path string) (net.Conn, error) {
-	path = strings.Replace(path, "/", "\\", -1)
+	path = strings.ReplaceAll(path, "/", "\\")
 	return winio.DialPipeContext(ctx, path)
 }
 
@@ -121,7 +124,7 @@ func LaunchWinProxy(opts WinProxyOpts, noInfo bool) {
 }
 
 func launchWinProxy(opts WinProxyOpts) (bool, string, error) {
-	machinePipe := ToDist(opts.Name)
+	machinePipe := env.WithPodmanPrefix(opts.Name)
 	if !PipeNameAvailable(machinePipe, MachineNameWait) {
 		return false, "", fmt.Errorf("could not start api proxy since expected pipe is not available: %s", machinePipe)
 	}
@@ -131,7 +134,7 @@ func launchWinProxy(opts WinProxyOpts) (bool, string, error) {
 		globalName = true
 	}
 
-	command, err := FindExecutablePeer(winSShProxy)
+	command, err := FindExecutablePeer(winSSHProxy)
 	if err != nil {
 		return globalName, "", err
 	}
@@ -181,6 +184,7 @@ func StopWinProxy(name string, vmtype define.VMType) error {
 
 	proc, err := os.FindProcess(int(pid))
 	if err != nil {
+		//nolint:nilerr
 		return nil
 	}
 	sendQuit(tid)
@@ -196,7 +200,7 @@ func readWinProxyTid(name string, vmtype define.VMType) (uint32, uint32, string,
 		return 0, 0, "", err
 	}
 
-	tidFile := filepath.Join(stateDir, winSshProxyTid)
+	tidFile := filepath.Join(stateDir, winSSHProxyTid)
 	contents, err := os.ReadFile(tidFile)
 	if err != nil {
 		return 0, 0, "", err
@@ -210,13 +214,13 @@ func readWinProxyTid(name string, vmtype define.VMType) (uint32, uint32, string,
 func waitTimeout(proc *os.Process, timeout time.Duration) bool {
 	done := make(chan bool)
 	go func() {
-		proc.Wait()
+		_, _ = proc.Wait()
 		done <- true
 	}()
 	ret := false
 	select {
 	case <-time.After(timeout):
-		proc.Kill()
+		_ = proc.Kill()
 		<-done
 	case <-done:
 		ret = true
@@ -229,7 +233,8 @@ func waitTimeout(proc *os.Process, timeout time.Duration) bool {
 func sendQuit(tid uint32) {
 	user32 := syscall.NewLazyDLL("user32.dll")
 	postMessage := user32.NewProc("PostThreadMessageW")
-	postMessage.Call(uintptr(tid), WM_QUIT, 0, 0)
+	//nolint:dogsled
+	_, _, _ = postMessage.Call(uintptr(tid), WM_QUIT, 0, 0)
 }
 
 func FindExecutablePeer(name string) (string, error) {
@@ -247,7 +252,7 @@ func FindExecutablePeer(name string) (string, error) {
 }
 
 func GetWinProxyStateDir(name string, vmtype define.VMType) (string, error) {
-	dir, err := GetDataDir(vmtype)
+	dir, err := env.GetDataDir(vmtype)
 	if err != nil {
 		return "", err
 	}
@@ -257,13 +262,6 @@ func GetWinProxyStateDir(name string, vmtype define.VMType) (string, error) {
 	}
 
 	return stateDir, nil
-}
-
-func ToDist(name string) string {
-	if !strings.HasPrefix(name, "podman") {
-		name = "podman-" + name
-	}
-	return name
 }
 
 func GetEnvSetString(env string, val string) string {

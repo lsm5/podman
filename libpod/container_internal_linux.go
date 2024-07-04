@@ -71,6 +71,14 @@ func (c *Container) prepare() error {
 
 	go func() {
 		defer wg.Done()
+		if c.state.State == define.ContainerStateStopped {
+			// networking should not be reused after a stop
+			if err := c.cleanupNetwork(); err != nil {
+				createNetNSErr = err
+				return
+			}
+		}
+
 		// Set up network namespace if not already set up
 		noNetNS := c.state.NetNS == ""
 		if c.config.CreateNetNS && noNetNS && !c.config.PostConfigureNetNS {
@@ -413,27 +421,6 @@ func (c *Container) getOCICgroupPath() (string, error) {
 	}
 }
 
-// If the container is rootless, set up the slirp4netns network
-func (c *Container) setupRootlessNetwork() error {
-	// set up slirp4netns again because slirp4netns will die when conmon exits
-	if c.config.NetMode.IsSlirp4netns() {
-		err := c.runtime.setupSlirp4netns(c, c.state.NetNS)
-		if err != nil {
-			return err
-		}
-	}
-
-	// set up rootlesskit port forwarder again since it dies when conmon exits
-	// we use rootlesskit port forwarder only as rootless and when bridge network is used
-	if rootless.IsRootless() && c.config.NetMode.IsBridge() && len(c.config.PortMappings) > 0 {
-		err := c.runtime.setupRootlessPortMappingViaRLK(c, c.state.NetNS, c.state.NetworkStatus)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func openDirectory(path string) (fd int, err error) {
 	return unix.Open(path, unix.O_RDONLY|unix.O_PATH, 0)
 }
@@ -616,7 +603,12 @@ func (c *Container) setCgroupsPath(g *generate.Generator) error {
 	return nil
 }
 
-func (c *Container) addSlirp4netnsDNS(nameservers []string) []string {
+// addSpecialDNS adds special dns servers for slirp4netns and pasta
+func (c *Container) addSpecialDNS(nameservers []string) []string {
+	if c.pastaResult != nil {
+		nameservers = append(nameservers, c.pastaResult.DNSForwardIPs...)
+	}
+
 	// slirp4netns has a built in DNS forwarder.
 	if c.config.NetMode.IsSlirp4netns() {
 		slirp4netnsDNS, err := slirp4netns.GetDNS(c.slirp4netnsSubnet)
@@ -680,7 +672,7 @@ func (c *Container) makePlatformBindMounts() error {
 	// Make /etc/hostname
 	// This should never change, so no need to recreate if it exists
 	if _, ok := c.state.BindMounts["/etc/hostname"]; !ok {
-		hostnamePath, err := c.writeStringToRundir("hostname", c.Hostname())
+		hostnamePath, err := c.writeStringToRundir("hostname", c.Hostname()+"\n")
 		if err != nil {
 			return fmt.Errorf("creating hostname file for container %s: %w", c.ID(), err)
 		}

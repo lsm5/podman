@@ -51,7 +51,6 @@ func (i *Image) Id() string { //nolint:revive,stylecheck
 	return i.ID
 }
 
-// swagger:model LibpodImageSummary
 type ImageSummary = entitiesTypes.ImageSummary
 
 // ImageRemoveOptions can be used to alter image removal.
@@ -151,6 +150,10 @@ type ImagePushOptions struct {
 	// RemoveSignatures, discard any pre-existing signatures in the image.
 	// Ignored for remote calls.
 	RemoveSignatures bool
+	// Retry number of times to retry push in case of failure
+	Retry *uint
+	// RetryDelay between retries in case of push failures
+	RetryDelay string
 	// SignaturePolicy to use when pulling.  Ignored for remote calls.
 	SignaturePolicy string
 	// Signers, if non-empty, asks for signatures to be added during the copy
@@ -238,8 +241,11 @@ type ImageSearchReport = entitiesTypes.ImageSearchReport
 
 // Image List Options
 type ImageListOptions struct {
-	All    bool     `json:"all" schema:"all"`
-	Filter []string `json:"Filter,omitempty"`
+	All bool
+	// ExtendedAttributes is used by the libpod endpoint only to deliver extra information
+	// that the compat endpoint does not
+	ExtendedAttributes bool
+	Filter             []string
 }
 
 type ImagePruneOptions struct {

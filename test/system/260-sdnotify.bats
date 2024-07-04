@@ -233,6 +233,24 @@ READY=1" "Container log after healthcheck run"
     is "$output" "running" "make sure container is still running"
 
     run_podman rm -f -t0 $ctr
+
+    # Disable until the race condition https://github.com/containers/podman/issues/22760 is fixed
+    # ctr=$(random_string)
+    # run_podman run --name $ctr                       \
+    #         --health-cmd="touch /terminate"          \
+    #         --sdnotify=healthy                       \
+    #         $IMAGE sh -c 'while test \! -e /terminate; do sleep 0.1; done; echo finished'
+    # is "$output" "finished" "make sure container exited successfully"
+    # run_podman rm -f -t0 $ctr
+
+    # ctr=$(random_string)
+    # run_podman 12 run --name $ctr --rm               \
+    #         --health-cmd="touch /terminate"          \
+    #         --sdnotify=healthy                       \
+    #         $IMAGE sh -c 'while test \! -e /terminate; do sleep 0.1; done; echo finished; exit 12'
+    # is "$output" "finished" "make sure container exited"
+    # run_podman rm -f -t0 $ctr
+
     _stop_socat
 }
 
@@ -300,6 +318,7 @@ READY=1" "sdnotify sent MAINPID and READY"
     # Clean up pod and pause image
     run_podman play kube --down $PODMAN_TMPDIR/test.yaml
     run_podman rmi $(pause_image)
+    run_podman network rm podman-default-kube-network
 }
 
 @test "sdnotify : play kube - with policies" {
@@ -409,6 +428,7 @@ READY=1" "sdnotify sent MAINPID and READY"
     # Clean up pod and pause image
     run_podman play kube --down $yaml_source
     run_podman rmi $(pause_image)
+    run_podman network rm podman-default-kube-network
 }
 
 function generate_exit_code_yaml {
@@ -457,31 +477,41 @@ none | true  | false | 0
 none | false | false | 0
 "
 
-    # I am sorry, this is a long test as we need to test the upper matrix
-    # twice. The first run is using the default sdnotify policy of "ignore".
+    # In each iteration we switch between the sdnotify policy ignore and conmon.
+    # We could run them in a loop for each case but the test is slow so let's
+    # just switch between them as it should cover both policies sufficiently.
+    # Note because of this make sure to have at least two exit code cases directly
+    # after each other above so both polices will get at least once the error case.
+    # The first run is using the default sdnotify policy of "ignore".
     # In this case, the service container serves as the main PID of the service
     # to have a minimal resource footprint.  The second run is using the
     # "conmon" sdnotify policy in which case Podman needs to serve as the main
     # PID to act as an sdnotify proxy; there Podman will wait for the service
     # container to exit and reflects its exit code.
+    sdnotify_policy=ignore
     while read exit_code_prop cmd1 cmd2 exit_code; do
-        for sdnotify_policy in ignore conmon; do
-            generate_exit_code_yaml $fname $cmd1 $cmd2 $sdnotify_policy
-            yaml_sha=$(sha256sum $fname)
-            service_container="${yaml_sha:0:12}-service"
-            podman_exit=$exit_code
-            if [[ $sdnotify_policy == "ignore" ]];then
-                 podman_exit=0
-            fi
-            run_podman $podman_exit kube play --service-exit-code-propagation="$exit_code_prop" --service-container $fname
-            # Make sure that there are no error logs (e.g., #19715)
-            assert "$output" !~ "error msg="
-            run_podman container inspect --format '{{.KubeExitCodePropagation}}' $service_container
-            is "$output" "$exit_code_prop" "service container has the expected policy set in its annotations"
-            run_podman wait $service_container
-            is "$output" "$exit_code" "service container exit code (propagation: $exit_code_prop, policy: $service_policy, cmds: $cmd1 + $cmd2)"
-            run_podman kube down $fname
-        done
+        generate_exit_code_yaml $fname $cmd1 $cmd2 $sdnotify_policy
+        yaml_sha=$(sha256sum $fname)
+        service_container="${yaml_sha:0:12}-service"
+        podman_exit=$exit_code
+        if [[ $sdnotify_policy == "ignore" ]];then
+             podman_exit=0
+        fi
+        run_podman $podman_exit kube play --service-exit-code-propagation="$exit_code_prop" --service-container $fname
+        # Make sure that there are no error logs (e.g., #19715)
+        assert "$output" !~ "error msg="
+        run_podman container inspect --format '{{.KubeExitCodePropagation}}' $service_container
+        is "$output" "$exit_code_prop" "service container has the expected policy set in its annotations"
+        run_podman wait $service_container
+        is "$output" "$exit_code" "service container exit code (propagation: $exit_code_prop, policy: $sdnotify_policy, cmds: $cmd1 + $cmd2)"
+        run_podman kube down $fname
+
+        # in each iteration switch between conmon/ignore policy to get coverage for both
+        if [[ $sdnotify_policy == "ignore" ]]; then
+            sdnotify_policy=conmon
+        else
+            sdnotify_policy=ignore
+        fi
     done < <(parse_table "$exit_tests")
 
     # A final smoke test to make sure bogus policies lead to an error
@@ -489,6 +519,7 @@ none | false | false | 0
     is "$output" "Error: unsupported exit-code propagation \"bogus\"" "error on unsupported exit-code propagation"
 
     run_podman rmi $(pause_image)
+    run_podman network rm podman-default-kube-network
 }
 
 @test "podman pull - EXTEND_TIMEOUT_USEC" {
@@ -567,7 +598,22 @@ READY=1" "podman-system-service sends expected data over NOTIFY_SOCKET"
     assert "$output" !~ "EXTEND_TIMEOUT_USEC="
 
     # Give the system-service 5sec to terminate before killing it.
-    /bin/kill --timeout 5000 KILL --signal TERM $mainpid
+    kill -TERM $mainpid
+    timeout=5
+    while :;do
+        if ! kill -0 $mainpid; then
+            # Yay, it's gone
+            break
+        fi
+
+        timeout=$((timeout - 1))
+        if [[ $timeout -eq 0 ]]; then
+            kill -KILL $mainpid
+            break
+        fi
+        sleep 1
+    done
+
     run_podman rmi $image_on_local_registry
     _stop_socat
 }

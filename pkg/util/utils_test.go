@@ -2,10 +2,13 @@ package util
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/containers/storage/pkg/idtools"
+	stypes "github.com/containers/storage/types"
 	ruser "github.com/moby/sys/user"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
@@ -572,4 +575,198 @@ func TestConvertMappings(t *testing.T) {
 		assert.Equal(t, start[i].HostID, convertedBack[i].HostID)
 		assert.Equal(t, start[i].Size, convertedBack[i].Size)
 	}
+}
+
+func TestConvertTimeout(t *testing.T) {
+	timeout := ConvertTimeout(0)
+	assert.Equal(t, uint(0), timeout)
+
+	timeout = ConvertTimeout(100)
+	assert.Equal(t, uint(100), timeout)
+
+	timeout = ConvertTimeout(-1)
+	assert.Equal(t, uint(math.MaxUint32), timeout)
+
+	timeout = ConvertTimeout(-100)
+	assert.Equal(t, uint(math.MaxUint32), timeout)
+}
+
+func TestGetRootlessKeepIDMapping(t *testing.T) {
+	tests := []struct {
+		uid, gid                 int
+		uids, gids               []idtools.IDMap
+		expectedOptions          *stypes.IDMappingOptions
+		expectedUID, expectedGID int
+		expectedError            error
+	}{
+		{
+			uid:  1000,
+			gid:  1000,
+			uids: []idtools.IDMap{},
+			gids: []idtools.IDMap{},
+			expectedOptions: &stypes.IDMappingOptions{
+				HostUIDMapping: false,
+				HostGIDMapping: false,
+				UIDMap:         []idtools.IDMap{{ContainerID: 1000, HostID: 0, Size: 1}},
+				GIDMap:         []idtools.IDMap{{ContainerID: 1000, HostID: 0, Size: 1}},
+			},
+			expectedUID: 1000,
+			expectedGID: 1000,
+		},
+		{
+			uid:  0,
+			gid:  0,
+			uids: []idtools.IDMap{{ContainerID: 0, HostID: 100000, Size: 65536}},
+			gids: []idtools.IDMap{{ContainerID: 0, HostID: 100000, Size: 65536}},
+			expectedOptions: &stypes.IDMappingOptions{
+				HostUIDMapping: false,
+				HostGIDMapping: false,
+				UIDMap:         []idtools.IDMap{{ContainerID: 0, HostID: 0, Size: 1}, {ContainerID: 1, HostID: 1, Size: 65536}},
+				GIDMap:         []idtools.IDMap{{ContainerID: 0, HostID: 0, Size: 1}, {ContainerID: 1, HostID: 1, Size: 65536}},
+			},
+			expectedUID: 0,
+			expectedGID: 0,
+		},
+	}
+
+	for _, test := range tests {
+		options, uid, gid, err := getRootlessKeepIDMapping(test.uid, test.gid, test.uids, test.gids)
+		assert.Nil(t, err)
+		assert.Equal(t, test.expectedOptions, options)
+		assert.Equal(t, test.expectedUID, uid)
+		assert.Equal(t, test.expectedGID, gid)
+	}
+}
+
+func getDefaultMountOptionsNoStat(path string) (defaultMountOptions, error) {
+	return defaultMountOptions{false, true, true}, nil
+}
+
+func TestProcessOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		options    []string
+		isTmpfs    bool
+		sourcePath string
+		expected   []string
+		expectErr  bool
+	}{
+		{
+			name:       "tmpfs",
+			options:    []string{"rw", "size=512m"},
+			isTmpfs:    true,
+			sourcePath: "",
+			expected:   []string{"nodev", "nosuid", "rprivate", "rw", "size=512m", "tmpcopyup"},
+		},
+		{
+			name:       "duplicate idmap option",
+			sourcePath: "/path/to/source",
+			options:    []string{"idmap", "idmap"},
+			expectErr:  true,
+		},
+		{
+			name:       "mode allowed only with tmpfs",
+			sourcePath: "/path/to/source",
+			options:    []string{"rw", "rbind", "mode=0123"},
+			expectErr:  true,
+		},
+		{
+			name:       "noswap allowed only with tmpfs",
+			sourcePath: "/path/to/source",
+			options:    []string{"noswap"},
+			expectErr:  true,
+		},
+		{
+			name:       "tmpcopyup allowed only with tmpfs",
+			sourcePath: "/path/to/source",
+			options:    []string{"tmpcopyup"},
+			expectErr:  true,
+		},
+		{
+			name:       "notmpcopyup allowed only with tmpfs",
+			sourcePath: "/path/to/source",
+			options:    []string{"notmpcopyup"},
+			expectErr:  true,
+		},
+		{
+			name:       "z not allowed with tmpfs",
+			isTmpfs:    true,
+			sourcePath: "/path/to/source",
+			options:    []string{"z"},
+			expectErr:  true,
+		},
+		{
+			name:       "size allowed only with tmpfs",
+			sourcePath: "/path/to/source",
+			options:    []string{"size=123456"},
+			expectErr:  true,
+		},
+		{
+			name:       "conflicting option dev/nodev",
+			sourcePath: "/path/to/source",
+			options:    []string{"dev", "nodev"},
+			expectErr:  true,
+		},
+		{
+			name:       "conflicting option suid/nosuid",
+			sourcePath: "/path/to/source",
+			options:    []string{"suid", "nosuid"},
+			expectErr:  true,
+		},
+		{
+			name:       "conflicting option exec/noexec",
+			sourcePath: "/path/to/source",
+			options:    []string{"noexec", "exec"},
+			expectErr:  true,
+		},
+		{
+			name:       "conflicting option ro/rw",
+			sourcePath: "/path/to/source",
+			options:    []string{"ro", "rw"},
+			expectErr:  true,
+		},
+		{
+			name:       "conflicting option bind/rbind",
+			sourcePath: "/path/to/source",
+			options:    []string{"bind", "rbind"},
+			expectErr:  true,
+		},
+		{
+			name:       "conflicting option bind/rbind",
+			sourcePath: "/path/to/source",
+			options:    []string{"bind", "rbind"},
+			expectErr:  true,
+		},
+		{
+			name:       "default bind mount",
+			sourcePath: "/path/to/source",
+			expected:   []string{"nodev", "nosuid", "rbind", "rprivate", "rw"},
+		},
+		{
+			name:       "default bind mount with bind",
+			sourcePath: "/path/to/source",
+			options:    []string{"bind"},
+			expected:   []string{"nodev", "nosuid", "bind", "private", "rw"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, err := processOptionsInternal(tt.options, tt.isTmpfs, tt.sourcePath, getDefaultMountOptionsNoStat)
+			if tt.expectErr {
+				assert.NotNil(t, err)
+			} else {
+				assert.Nil(t, err)
+				sort.Strings(opts)
+				sort.Strings(tt.expected)
+				assert.Equal(t, opts, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetRootlessPauseProcessPidPath(t *testing.T) {
+	dir, err := GetRootlessPauseProcessPidPath()
+	assert.NoError(t, err)
+	assert.NotEqual(t, dir, "libpod/tmp/pause.pid")
 }

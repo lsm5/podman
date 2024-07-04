@@ -115,16 +115,31 @@ func (c *Container) Start(ctx context.Context, recursive bool) (finalErr error) 
 	}
 
 	// Start the container
-	return c.start(ctx)
+	if err := c.start(); err != nil {
+		return err
+	}
+	return c.waitForHealthy(ctx)
 }
 
 // Update updates the given container.
-// only the cgroup config can be updated and therefore only a linux resource spec is passed.
-func (c *Container) Update(res *spec.LinuxResources) error {
-	if err := c.syncContainer(); err != nil {
-		return err
+// Either resource limits or restart policy can be updated.
+// Either resourcs or restartPolicy must not be nil.
+// If restartRetries is not nil, restartPolicy must be set and must be "on-failure".
+func (c *Container) Update(resources *spec.LinuxResources, restartPolicy *string, restartRetries *uint) error {
+	if !c.batched {
+		c.lock.Lock()
+		defer c.lock.Unlock()
+
+		if err := c.syncContainer(); err != nil {
+			return err
+		}
 	}
-	return c.update(res)
+
+	if c.ensureState(define.ContainerStateRemoving) {
+		return fmt.Errorf("container %s is being removed, cannot update: %w", c.ID(), define.ErrCtrStateInvalid)
+	}
+
+	return c.update(resources, restartPolicy, restartRetries)
 }
 
 // StartAndAttach starts a container and attaches to it.
@@ -172,7 +187,7 @@ func (c *Container) StartAndAttach(ctx context.Context, streams *define.AttachSt
 	// Attach to the container before starting it
 	go func() {
 		// Start resizing
-		if c.LogDriver() != define.PassthroughLogging {
+		if c.LogDriver() != define.PassthroughLogging && c.LogDriver() != define.PassthroughTTYLogging {
 			registerResizeFunc(resize, c.bundlePath())
 		}
 
@@ -182,6 +197,9 @@ func (c *Container) StartAndAttach(ctx context.Context, streams *define.AttachSt
 		opts.Start = true
 		opts.Started = startedChan
 
+		// attach and start the container on a different thread.  waitForHealthy must
+		// be done later, as it requires to run on the same thread that holds the lock
+		// for the container.
 		if err := c.ociRuntime.Attach(c, opts); err != nil {
 			attachChan <- err
 		}
@@ -195,7 +213,7 @@ func (c *Container) StartAndAttach(ctx context.Context, streams *define.AttachSt
 		c.newContainerEvent(events.Attach)
 	}
 
-	return attachChan, nil
+	return attachChan, c.waitForHealthy(ctx)
 }
 
 // RestartWithTimeout restarts a running container and takes a given timeout in uint
@@ -304,6 +322,9 @@ func (c *Container) Attach(streams *define.AttachStreams, keys string, resize <-
 	if c.LogDriver() == define.PassthroughLogging {
 		return fmt.Errorf("this container is using the 'passthrough' log driver, cannot attach: %w", define.ErrNoLogs)
 	}
+	if c.LogDriver() == define.PassthroughTTYLogging {
+		return fmt.Errorf("this container is using the 'passthrough-tty' log driver, cannot attach: %w", define.ErrNoLogs)
+	}
 	if !c.batched {
 		c.lock.Lock()
 		if err := c.syncContainer(); err != nil {
@@ -336,7 +357,7 @@ func (c *Container) Attach(streams *define.AttachStreams, keys string, resize <-
 	}
 
 	// Start resizing
-	if c.LogDriver() != define.PassthroughLogging {
+	if c.LogDriver() != define.PassthroughLogging && c.LogDriver() != define.PassthroughTTYLogging {
 		registerResizeFunc(resize, c.bundlePath())
 	}
 
@@ -560,11 +581,16 @@ func (c *Container) Wait(ctx context.Context) (int32, error) {
 // WaitForExit blocks until the container exits and returns its exit code. The
 // argument is the interval at which checks the container's status.
 func (c *Container) WaitForExit(ctx context.Context, pollInterval time.Duration) (int32, error) {
+	id := c.ID()
 	if !c.valid {
+		// if the container is not valid at this point as it was deleted,
+		// check if the exit code was recorded in the db.
+		exitCode, err := c.runtime.state.GetContainerExitCode(id)
+		if err == nil {
+			return exitCode, nil
+		}
 		return -1, define.ErrCtrRemoved
 	}
-
-	id := c.ID()
 	var conmonTimer time.Timer
 	conmonTimerSet := false
 
@@ -746,7 +772,7 @@ func (c *Container) WaitForConditionWithInterval(ctx context.Context, waitTimeou
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-
+			stoppedCount := 0
 			for {
 				if len(wantedStates) > 0 {
 					state, err := c.State()
@@ -760,6 +786,21 @@ func (c *Container) WaitForConditionWithInterval(ctx context.Context, waitTimeou
 					}
 				}
 				if len(wantedHealthStates) > 0 {
+					// even if we are interested only in the health check
+					// check that the container is still running to avoid
+					// waiting until the timeout expires.
+					if stoppedCount > 0 {
+						stoppedCount++
+					} else {
+						state, err := c.State()
+						if err != nil {
+							trySend(-1, err)
+							return
+						}
+						if state != define.ContainerStateCreated && state != define.ContainerStateRunning && state != define.ContainerStatePaused {
+							stoppedCount++
+						}
+					}
 					status, err := c.HealthCheckStatus()
 					if err != nil {
 						trySend(-1, err)
@@ -767,6 +808,12 @@ func (c *Container) WaitForConditionWithInterval(ctx context.Context, waitTimeou
 					}
 					if _, found := wantedHealthStates[status]; found {
 						trySend(-1, nil)
+						return
+					}
+					// wait for another waitTimeout interval to give the health check process some time
+					// to record the healthy status.
+					if stoppedCount > 1 {
+						trySend(-1, define.ErrCtrStopped)
 						return
 					}
 				}

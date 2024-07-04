@@ -5,6 +5,7 @@
 
 load helpers
 load helpers.systemd
+load helpers.network
 
 SERVICE_NAME="podman_test_$(random_string)"
 
@@ -141,14 +142,16 @@ function service_cleanup() {
 @test "podman generate systemd - envar" {
     cname=$(random_string)
     FOO=value BAR=%s run_podman create --name $cname --env FOO -e BAR --env MYVAR=myval \
-        $IMAGE sh -c 'printenv && sleep 100'
+        $IMAGE sh -c 'printenv && echo READY; trap 'exit' SIGTERM; while :; do sleep 0.1; done'
 
     # Start systemd service to run this container
     service_setup
 
-    # Give container time to start; make sure output looks top-like
-    sleep 2
-    run_podman logs $cname
+    # Give container time to start and print output
+    # wait_for_ready returns directly if the logs matches and preserves $output
+    # for us so we do not have to call podman logs again here if we match the env below.
+    wait_for_ready $cname
+
     is "$output" ".*FOO=value.*" "FOO environment variable set"
     is "$output" ".*BAR=%s.*" "BAR environment variable set"
     is "$output" ".*MYVAR=myval.*" "MYVAL environment variable set"
@@ -272,6 +275,7 @@ LISTEN_FDNAMES=listen_fdnames" | sort)
     run_podman create --name $cname $IMAGE top
     run_podman 125 generate systemd --new=false --template -n $cname
     is "$output" ".*--template cannot be set" "Error message should be '--template requires --new'"
+    run_podman rm $cname
 }
 
 @test "podman --cgroup=cgroupfs doesn't show systemd warning" {
@@ -284,6 +288,7 @@ LISTEN_FDNAMES=listen_fdnames" | sort)
     container_uuid=$output
     run_podman inspect test --format '{{ .ID }}'
     is "${container_uuid}" "${output:0:32}" "UUID should be first 32 chars of Container id"
+    run_podman rm test
 }
 
 @test "podman --systemd fails on cgroup v1 with a private cgroupns" {
@@ -294,7 +299,7 @@ LISTEN_FDNAMES=listen_fdnames" | sort)
 }
 
 # https://github.com/containers/podman/issues/13153
-@test "podman rootless-netns slirp4netns process should be in different cgroup" {
+@test "podman rootless-netns processes should be in different cgroup" {
     is_rootless || skip "only meaningful for rootless"
 
     cname=$(random_string)
@@ -314,9 +319,11 @@ LISTEN_FDNAMES=listen_fdnames" | sort)
     # stop systemd container
     service_cleanup
 
+    pasta_iface=$(default_ifname)
+
     # now check that the rootless netns slirp4netns process is still alive and working
     run_podman unshare --rootless-netns ip addr
-    is "$output" ".*tap0.*" "slirp4netns interface exists in the netns"
+    is "$output" ".*$pasta_iface.*" "pasta interface exists in the netns"
     run_podman exec $cname2 nslookup google.com
 
     run_podman rm -f -t0 $cname2
@@ -394,13 +401,13 @@ spec:
   - command:
     - sh
     - -c
-    - echo a stdout; echo a stderr 1>&2; sleep inf
+    - echo a stdout; echo a stderr 1>&2; trap 'exit' SIGTERM; while :; do sleep 0.1; done
     image: $IMAGE
     name: a
   - command:
     - sh
     - -c
-    - echo b stdout; echo b stderr 1>&2; sleep inf
+    - echo b stdout; echo b stderr 1>&2; trap 'exit' SIGTERM; while :; do sleep 0.1; done
     image: $IMAGE
     name: b
 EOF
@@ -452,8 +459,11 @@ $name stderr" "logs work with passthrough"
     # Kill the pod and make sure the service is not running.
     run_podman pod kill test_pod
     for i in {0..20}; do
+        # echos are for debugging test flakes
+        echo "$_LOG_PROMPT systemctl is-active $service_name"
         run systemctl is-active $service_name
-        if [[ $output == "failed" ]]; then
+        echo "$output"
+        if [[ "$output" == "inactive" ]]; then
             break
         fi
         sleep 0.5
@@ -472,6 +482,7 @@ $name stderr" "logs work with passthrough"
     run_podman 1 container exists $service_container
     run_podman 1 pod exists test_pod
     run_podman rmi $(pause_image)
+    run_podman network rm podman-default-kube-network
     rm -f $UNIT_DIR/$unit_name
 }
 
@@ -484,5 +495,23 @@ $name stderr" "logs work with passthrough"
     is "$output" ".*[DEPRECATED] command:"
     run_podman generate --help
     is "$output" ".*\[DEPRECATED\] Generate systemd units"
+    run_podman rm test
+}
+
+@test "podman passes down the KillSignal and StopTimeout setting" {
+    ctr=systemd_test_$(random_string 5)
+
+    run_podman run -d --name $ctr --stop-signal 5 --stop-timeout 7 --rm $IMAGE top
+    run_podman inspect $ctr --format '{{ .Id }}'
+    id="$output"
+
+    run systemctl show -p TimeoutStopUSec "libpod-${id}.scope"
+    assert "$output" == "TimeoutStopUSec=7s"
+
+    run systemctl show -p KillSignal "libpod-${id}.scope"
+    assert "$output" == "KillSignal=5"
+
+    # Clean up
+    run_podman rm -t 0 -f $ctr
 }
 # vim: filetype=sh

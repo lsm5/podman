@@ -996,7 +996,7 @@ func (s *SQLiteState) GetContainerExitCodeTimeStamp(id string) (*time.Time, erro
 	return &result, nil
 }
 
-// PruneExitCodes removes exit codes older than 5 minutes unless the associated
+// PruneContainerExitCodes removes exit codes older than 5 minutes unless the associated
 // container still exists.
 func (s *SQLiteState) PruneContainerExitCodes() (defErr error) {
 	if !s.valid {
@@ -1310,7 +1310,7 @@ func (s *SQLiteState) RewriteVolumeConfig(volume *Volume, newCfg *VolumeConfig) 
 		}
 	}()
 
-	results, err := tx.Exec("UPDATE VolumeConfig SET Name=?, JSON=? WHERE ID=?;", newCfg.Name, json, volume.Name())
+	results, err := tx.Exec("UPDATE VolumeConfig SET Name=?, JSON=? WHERE Name=?;", newCfg.Name, json, volume.Name())
 	if err != nil {
 		return fmt.Errorf("updating volume config table with new configuration for volume %s: %w", volume.Name(), err)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/containers/storage/pkg/archive"
 	"github.com/containers/storage/pkg/directory"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/idtools"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
@@ -214,20 +215,25 @@ const (
 	DifferOutputFormatFlat
 )
 
+// DifferFsVerity is a part of the experimental Differ interface and should not be used from outside of c/storage.
+// It configures the fsverity requirement.
 type DifferFsVerity int
 
 const (
 	// DifferFsVerityDisabled means no fs-verity is used
 	DifferFsVerityDisabled = iota
 
-	// DifferFsVerityEnabled means fs-verity is used when supported
-	DifferFsVerityEnabled
+	// DifferFsVerityIfAvailable means fs-verity is used when supported by
+	// the underlying kernel and filesystem.
+	DifferFsVerityIfAvailable
 
-	// DifferFsVerityRequired means fs-verity is required
+	// DifferFsVerityRequired means fs-verity is required.  Note this is not
+	// currently set or exposed by the overlay driver.
 	DifferFsVerityRequired
 )
 
-// DifferOptions overrides how the differ work
+// DifferOptions is a part of the experimental Differ interface and should not be used from outside of c/storage.
+// It overrides how the differ works.
 type DifferOptions struct {
 	// Format defines the destination directory layout format
 	Format DifferOutputFormat
@@ -249,8 +255,8 @@ type DriverWithDiffer interface {
 	// ApplyDiffWithDiffer applies the changes using the callback function.
 	// If id is empty, then a staging directory is created.  The staging directory is guaranteed to be usable with ApplyDiffFromStagingDirectory.
 	ApplyDiffWithDiffer(id, parent string, options *ApplyDiffWithDifferOpts, differ Differ) (output DriverWithDifferOutput, err error)
-	// ApplyDiffFromStagingDirectory applies the changes using the specified staging directory.
-	ApplyDiffFromStagingDirectory(id, parent, stagingDirectory string, diffOutput *DriverWithDifferOutput, options *ApplyDiffWithDifferOpts) error
+	// ApplyDiffFromStagingDirectory applies the changes using the diffOutput target directory.
+	ApplyDiffFromStagingDirectory(id, parent string, diffOutput *DriverWithDifferOutput, options *ApplyDiffWithDifferOpts) error
 	// CleanupStagingDirectory cleanups the staging directory.  It can be used to cleanup the staging directory on errors
 	CleanupStagingDirectory(stagingDirectory string) error
 	// DifferTarget gets the location where files are stored for the layer.
@@ -297,8 +303,8 @@ type AdditionalLayerStoreDriver interface {
 	Driver
 
 	// LookupAdditionalLayer looks up additional layer store by the specified
-	// digest and ref and returns an object representing that layer.
-	LookupAdditionalLayer(d digest.Digest, ref string) (AdditionalLayer, error)
+	// TOC digest and ref and returns an object representing that layer.
+	LookupAdditionalLayer(tocDigest digest.Digest, ref string) (AdditionalLayer, error)
 
 	// LookupAdditionalLayer looks up additional layer store by the specified
 	// ID and returns an object representing that layer.
@@ -376,8 +382,6 @@ type Options struct {
 	ImageStore          string
 	DriverPriority      []string
 	DriverOptions       []string
-	UIDMaps             []idtools.IDMap
-	GIDMaps             []idtools.IDMap
 	ExperimentalEnabled bool
 }
 
@@ -471,7 +475,7 @@ func ScanPriorDrivers(root string) map[string]bool {
 
 	for driver := range drivers {
 		p := filepath.Join(root, driver)
-		if _, err := os.Stat(p); err == nil {
+		if err := fileutils.Exists(p); err == nil {
 			driversMap[driver] = true
 		}
 	}

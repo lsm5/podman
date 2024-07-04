@@ -2,8 +2,18 @@
 # See the documentation for more information:
 # https://packit.dev/docs/configuration/
 
-specfile_path: rpm/podman.spec
+downstream_package_name: podman
 upstream_tag_template: v{version}
+
+packages:
+  podman-fedora:
+    pkg_tool: fedpkg
+    specfile_path: rpm/podman.spec
+  podman-centos:
+    pkg_tool: centpkg
+    specfile_path: rpm/podman.spec
+  podman-rhel:
+    specfile_path: rpm/podman.spec
 
 srpm_build_deps:
   - git-archive-all
@@ -16,25 +26,45 @@ actions:
 jobs:
   - job: copr_build
     trigger: pull_request
-    notifications:
+    packages: [podman-fedora]
+    notifications: &packit_build_failure_notification
       failure_comment:
         message: "Ephemeral COPR build failed. @containers/packit-build please check."
     enable_net: true
     targets:
-      - fedora-all-x86_64
-      - fedora-all-aarch64
-      - fedora-eln-x86_64
-      - fedora-eln-aarch64
-      - centos-stream+epel-next-8-x86_64
-      - centos-stream+epel-next-8-aarch64
-      - centos-stream+epel-next-9-x86_64
-      - centos-stream+epel-next-9-aarch64
-    additional_repos:
-      - "copr://rhcontainerbot/podman-next"
+      fedora-all-x86_64: {}
+      fedora-all-aarch64: {}
+      fedora-eln-x86_64:
+        additional_repos:
+          - "https://kojipkgs.fedoraproject.org/repos/eln-build/latest/x86_64/"
+      fedora-eln-aarch64:
+        additional_repos:
+          - "https://kojipkgs.fedoraproject.org/repos/eln-build/latest/aarch64/"
+
+  - job: copr_build
+    trigger: pull_request
+    packages: [podman-centos]
+    notifications: *packit_build_failure_notification
+    enable_net: true
+    targets:
+      - centos-stream-9-x86_64
+      - centos-stream-9-aarch64
+      - centos-stream-10-x86_64
+      - centos-stream-10-aarch64
+
+  - job: copr_build
+    trigger: pull_request
+    packages: [podman-rhel]
+    notifications: *packit_build_failure_notification
+    enable_net: true
+    targets:
+      - epel-9-x86_64
+      - epel-9-aarch64
 
   # Run on commit to main branch
   - job: copr_build
     trigger: commit
+    packages: [podman-fedora]
     notifications:
       failure_comment:
         message: "podman-next COPR build failed. @containers/packit-build please check."
@@ -46,6 +76,7 @@ jobs:
   - job: tests
     identifier: cockpit-revdeps
     trigger: pull_request
+    packages: [podman-fedora]
     notifications:
       failure_comment:
         message: "Cockpit tests failed for commit {commit_sha}. @martinpitt, @jelly, @mvollmer please check."
@@ -66,16 +97,26 @@ jobs:
   - job: propose_downstream
     trigger: release
     update_release: false
+    packages: [podman-fedora]
     dist_git_branches:
-      - fedora-development # Implies fedora-rawhide and any branched but unreleased version, will include f40 before f40 is marked stable.
+      - fedora-development
+      - fedora-latest
+
+  - job: propose_downstream
+    trigger: release
+    update_release: false
+    packages: [podman-centos]
+    dist_git_branches:
+      - c10s
 
   - job: koji_build
     trigger: commit
+    packages: [podman-fedora]
     dist_git_branches:
-      - fedora-development
+      - fedora-all
 
-        # TODO: Revisit once fedora 40 is branched and manual bodhi is enabled
-        #- job: bodhi_update
-        #trigger: commit
-        #dist_git_branches:
-        #- fedora-40 # rawhide updates are created automatically
+  - job: bodhi_update
+    trigger: commit
+    packages: [podman-fedora]
+    dist_git_branches:
+      - fedora-branched # rawhide updates are created automatically

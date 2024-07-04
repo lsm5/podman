@@ -3,6 +3,7 @@
 package wsl
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -10,9 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/containers/podman/v5/pkg/machine/env"
 	"github.com/containers/podman/v5/pkg/machine/ocipull"
+	"github.com/containers/podman/v5/pkg/machine/shim/diskpull"
 	"github.com/containers/podman/v5/pkg/machine/stdpull"
 	"github.com/containers/podman/v5/pkg/machine/wsl/wutil"
+	"github.com/containers/podman/v5/utils"
 
 	gvproxy "github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/podman/v5/pkg/machine"
@@ -31,7 +35,7 @@ func (w WSLStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConf
 		err error
 	)
 	// cleanup half-baked files if init fails at any point
-	callbackFuncs := machine.InitCleanup()
+	callbackFuncs := machine.CleanUp()
 	defer callbackFuncs.CleanIfErr(&err)
 	go callbackFuncs.CleanOnSignal()
 	mc.WSLHypervisor = new(vmconfigs.WSLConfig)
@@ -90,7 +94,7 @@ func (w WSLStubber) PrepareIgnition(_ *vmconfigs.MachineConfig, _ *ignition.Igni
 }
 
 func (w WSLStubber) Exists(name string) (bool, error) {
-	return isWSLExist(machine.ToDist(name))
+	return isWSLExist(env.WithPodmanPrefix(name))
 }
 
 func (w WSLStubber) MountType() vmconfigs.VolumeMountType {
@@ -106,10 +110,10 @@ func (w WSLStubber) Remove(mc *vmconfigs.MachineConfig) ([]string, func() error,
 	// below if we wanted to hard error on the wsl unregister
 	// of the vm
 	wslRemoveFunc := func() error {
-		if err := runCmdPassThrough(wutil.FindWSL(), "--unregister", machine.ToDist(mc.Name)); err != nil {
-			logrus.Error(err)
+		if err := runCmdPassThrough(wutil.FindWSL(), "--unregister", env.WithPodmanPrefix(mc.Name)); err != nil {
+			return err
 		}
-		return machine.ReleaseMachinePort(mc.SSH.Port)
+		return nil
 	}
 
 	return []string{}, wslRemoveFunc, nil
@@ -120,9 +124,6 @@ func (w WSLStubber) RemoveAndCleanMachines(_ *define.MachineDirs) error {
 }
 
 func (w WSLStubber) SetProviderAttrs(mc *vmconfigs.MachineConfig, opts define.SetOptions) error {
-	mc.Lock()
-	defer mc.Unlock()
-
 	state, err := w.State(mc, false)
 	if err != nil {
 		return err
@@ -158,9 +159,9 @@ func (w WSLStubber) SetProviderAttrs(mc *vmconfigs.MachineConfig, opts define.Se
 			return errors.New("user-mode networking can only be changed when the machine is not running")
 		}
 
-		dist := machine.ToDist(mc.Name)
+		dist := env.WithPodmanPrefix(mc.Name)
 		if err := changeDistUserModeNetworking(dist, mc.SSH.RemoteUsername, mc.ImagePath.GetPath(), *opts.UserModeNetworking); err != nil {
-			return fmt.Errorf("failure changing state of user-mode networking setting", err)
+			return fmt.Errorf("failure changing state of user-mode networking setting: %w", err)
 		}
 
 		mc.WSLHypervisor.UserModeNetworking = *opts.UserModeNetworking
@@ -204,22 +205,7 @@ func (w WSLStubber) PostStartNetworking(mc *vmconfigs.MachineConfig, noInfo bool
 }
 
 func (w WSLStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func() error, error) {
-	useProxy := setupWslProxyEnv()
-	dist := machine.ToDist(mc.Name)
-
-	// TODO Quiet is hard set to false: follow up
-	if err := configureProxy(dist, useProxy, false); err != nil {
-		return nil, nil, err
-	}
-
-	// TODO The original code checked to see if the SSH port was actually open and re-assigned if it was
-	// we could consider this but it should be higher up the stack
-	// if !machine.IsLocalPortAvailable(v.Port) {
-	// logrus.Warnf("SSH port conflict detected, reassigning a new port")
-	//	if err := v.reassignSshPort(); err != nil {
-	//		return err
-	//	}
-	// }
+	dist := env.WithPodmanPrefix(mc.Name)
 
 	err := wslInvoke(dist, "/root/bootstrap")
 	if err != nil {
@@ -248,15 +234,12 @@ func (w WSLStubber) StopVM(mc *vmconfigs.MachineConfig, hardStop bool) error {
 	var (
 		err error
 	)
-	mc.Lock()
-	defer mc.Unlock()
 
-	// recheck after lock
 	if running, err := isRunning(mc.Name); !running {
 		return err
 	}
 
-	dist := machine.ToDist(mc.Name)
+	dist := env.WithPodmanPrefix(mc.Name)
 
 	// Stop user-mode networking if enabled
 	if err := stopUserModeNetworking(mc); err != nil {
@@ -269,17 +252,21 @@ func (w WSLStubber) StopVM(mc *vmconfigs.MachineConfig, hardStop bool) error {
 
 	cmd := exec.Command(wutil.FindWSL(), "-u", "root", "-d", dist, "sh")
 	cmd.Stdin = strings.NewReader(waitTerm)
+	out := &bytes.Buffer{}
+	cmd.Stderr = out
+	cmd.Stdout = out
+
 	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("executing wait command: %w", err)
 	}
 
 	exitCmd := exec.Command(wutil.FindWSL(), "-u", "root", "-d", dist, "/usr/local/bin/enterns", "systemctl", "exit", "0")
 	if err = exitCmd.Run(); err != nil {
-		return fmt.Errorf("stopping sysd: %w", err)
+		return fmt.Errorf("stopping systemd: %w", err)
 	}
 
 	if err = cmd.Wait(); err != nil {
-		return err
+		logrus.Warnf("Failed to wait for systemd to exit: (%s)", strings.TrimSpace(out.String()))
 	}
 
 	return terminateDist(dist)
@@ -289,14 +276,28 @@ func (w WSLStubber) StopHostNetworking(mc *vmconfigs.MachineConfig, vmType defin
 	return stopUserModeNetworking(mc)
 }
 
+func (w WSLStubber) UpdateSSHPort(mc *vmconfigs.MachineConfig, port int) error {
+	dist := env.WithPodmanPrefix(mc.Name)
+
+	if err := wslInvoke(dist, "sh", "-c", fmt.Sprintf(changePort, port)); err != nil {
+		return fmt.Errorf("could not change SSH port for guest OS: %w", err)
+	}
+
+	return nil
+}
+
 func (w WSLStubber) VMType() define.VMType {
 	return define.WSLVirt
 }
 
-func (w WSLStubber) GetDisk(_ string, dirs *define.MachineDirs, mc *vmconfigs.MachineConfig) error {
+func (w WSLStubber) GetDisk(userInputPath string, dirs *define.MachineDirs, mc *vmconfigs.MachineConfig) error {
 	var (
 		myDisk ocipull.Disker
 	)
+
+	if userInputPath != "" {
+		return diskpull.GetDisk(userInputPath, dirs, mc.ImagePath, w.VMType(), mc.Name)
+	}
 
 	// check github for the latest version of the WSL dist
 	downloadURL, downloadVersion, _, _, err := GetFedoraDownloadForWSL()
@@ -308,8 +309,7 @@ func (w WSLStubber) GetDisk(_ string, dirs *define.MachineDirs, mc *vmconfigs.Ma
 	// i.e.v39.0.31-rootfs.tar.xz
 	versionedBase := fmt.Sprintf("%s-%s", downloadVersion, filepath.Base(downloadURL.Path))
 
-	// TODO we need a mechanism for "flushing" old cache files
-	cachedFile, err := dirs.DataDir.AppendToNewVMFile(versionedBase, nil)
+	cachedFile, err := dirs.ImageCacheDir.AppendToNewVMFile(versionedBase, nil)
 	if err != nil {
 		return err
 	}
@@ -318,14 +318,36 @@ func (w WSLStubber) GetDisk(_ string, dirs *define.MachineDirs, mc *vmconfigs.Ma
 	if _, err = os.Stat(cachedFile.GetPath()); err == nil {
 		logrus.Debugf("%q already exists locally", cachedFile.GetPath())
 		myDisk, err = stdpull.NewStdDiskPull(cachedFile.GetPath(), mc.ImagePath)
+		if err != nil {
+			return err
+		}
 	} else {
-		// no cached file
-		myDisk, err = stdpull.NewDiskFromURL(downloadURL.String(), mc.ImagePath, dirs.DataDir, &versionedBase)
-	}
-	if err != nil {
-		return err
+		files, err := os.ReadDir(dirs.ImageCacheDir.GetPath())
+		if err != nil {
+			logrus.Warn("failed to clean machine image cache: ", err)
+		} else {
+			defer func() {
+				for _, file := range files {
+					path := filepath.Join(dirs.ImageCacheDir.GetPath(), file.Name())
+					logrus.Debugf("cleaning cached image: %s", path)
+					err := utils.GuardedRemoveAll(path)
+					if err != nil && !errors.Is(err, os.ErrNotExist) {
+						logrus.Warn("failed to clean machine image cache: ", err)
+					}
+				}
+			}()
+		}
+
+		myDisk, err = stdpull.NewDiskFromURL(downloadURL.String(), mc.ImagePath, dirs.ImageCacheDir, &versionedBase, true)
+		if err != nil {
+			return err
+		}
 	}
 	// up until now, nothing has really happened
 	// pull if needed and decompress to image location
 	return myDisk.Get()
+}
+
+func (w WSLStubber) GetRosetta(mc *vmconfigs.MachineConfig) (bool, error) {
+	return false, nil
 }

@@ -3,18 +3,12 @@
 package machine
 
 import (
-	"bufio"
-	"fmt"
-	"os"
-	"strings"
-
 	"github.com/containers/podman/v5/cmd/podman/registry"
 	"github.com/containers/podman/v5/libpod/events"
 	"github.com/containers/podman/v5/pkg/machine"
-	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/podman/v5/pkg/machine/env"
 	"github.com/containers/podman/v5/pkg/machine/shim"
 	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -61,7 +55,7 @@ func rm(_ *cobra.Command, args []string) error {
 		vmName = args[0]
 	}
 
-	dirs, err := machine.GetMachineDirs(provider.VMType())
+	dirs, err := env.GetMachineDirs(provider.VMType())
 	if err != nil {
 		return err
 	}
@@ -71,71 +65,9 @@ func rm(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	state, err := provider.State(mc, false)
-	if err != nil {
+	if err := shim.Remove(mc, provider, dirs, destroyOptions); err != nil {
 		return err
-	}
-
-	if state == define.Running {
-		if !destroyOptions.Force {
-			return &define.ErrVMRunningCannotDestroyed{Name: vmName}
-		}
-		if err := shim.Stop(mc, provider, dirs, true); err != nil {
-			return err
-		}
-	}
-
-	rmFiles, genericRm, err := mc.Remove(destroyOptions.SaveIgnition, destroyOptions.SaveImage)
-	if err != nil {
-		return err
-	}
-
-	providerFiles, providerRm, err := provider.Remove(mc)
-	if err != nil {
-		return err
-	}
-
-	// Add provider specific files to the list
-	rmFiles = append(rmFiles, providerFiles...)
-
-	// Important!
-	// Nothing can be removed at this point.  The user can still opt out below
-	//
-
-	if !destroyOptions.Force {
-		// Warn user
-		confirmationMessage(rmFiles)
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Are you sure you want to continue? [y/N] ")
-		answer, err := reader.ReadString('\n')
-		if err != nil {
-			return err
-		}
-		if strings.ToLower(answer)[0] != 'y' {
-			return nil
-		}
-	}
-
-	//
-	// All actual removal of files and vms should occur after this
-	//
-
-	// TODO Should this be a hard error?
-	if err := providerRm(); err != nil {
-		logrus.Errorf("failed to remove virtual machine from provider for %q", vmName)
-	}
-
-	// TODO Should this be a hard error?
-	if err := genericRm(); err != nil {
-		logrus.Error("failed to remove machines files")
 	}
 	newMachineEvent(events.Remove, events.Event{Name: vmName})
 	return nil
-}
-
-func confirmationMessage(files []string) {
-	fmt.Printf("The following files will be deleted:\n\n\n")
-	for _, msg := range files {
-		fmt.Println(msg)
-	}
 }

@@ -5,6 +5,7 @@ package vsock
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 
@@ -24,8 +25,8 @@ const (
 	HvsockPurpose = "Purpose"
 	// VsockRegistryPath describes the registry path to where the hvsock registry entries live
 	VsockRegistryPath = `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices`
-	// LinuxVm is the default guid for a Linux VM on Windows
-	LinuxVm = "FACB-11E6-BD58-64006A7986D3"
+	// LinuxVM is the default guid for a Linux VM on Windows
+	LinuxVM = "FACB-11E6-BD58-64006A7986D3"
 )
 
 // HVSockPurpose describes what the hvsock is needed for
@@ -141,7 +142,6 @@ func (hv *HVSockRegistryEntry) validate() error {
 	if len(hv.KeyName) < 1 {
 		return errors.New("required field keypath is empty")
 	}
-	//decimal_num, err = strconv.ParseInt(hexadecimal_num, 16, 64)
 	return nil
 }
 
@@ -150,7 +150,7 @@ func (hv *HVSockRegistryEntry) exists() (bool, error) {
 	_ = foo
 	_, err := openVSockRegistryEntry(hv.fqPath())
 	if err == nil {
-		return true, err
+		return true, nil
 	}
 	if errors.Is(err, registry.ErrNotExist) {
 		return false, nil
@@ -191,7 +191,7 @@ func findOpenHVSockPort() (uint64, error) {
 func NewHVSockRegistryEntry(machineName string, purpose HVSockPurpose) (*HVSockRegistryEntry, error) {
 	// a so-called wildcard entry ... everything from FACB -> 6D3 is MS special sauce
 	// for a " linux vm".  this first segment is hexi for the hvsock port number
-	//00000400-FACB-11E6-BD58-64006A7986D3
+	// 00000400-FACB-11E6-BD58-64006A7986D3
 	port, err := findOpenHVSockPort()
 	if err != nil {
 		return nil, err
@@ -212,7 +212,7 @@ func portToKeyName(port uint64) string {
 	// this could be flattened but given the complexity, I thought it might
 	// be more difficult to read
 	hexi := strings.ToUpper(fmt.Sprintf("%08x", port))
-	return fmt.Sprintf("%s-%s", hexi, LinuxVm)
+	return fmt.Sprintf("%s-%s", hexi, LinuxVM)
 }
 
 func LoadHVSockRegistryEntry(port uint64) (*HVSockRegistryEntry, error) {
@@ -259,21 +259,18 @@ func (hv *HVSockRegistryEntry) Listener() (net.Listener, error) {
 	return listener, nil
 }
 
-// Listen is used on the windows side to listen for anything to come
-// over the hvsock as a signal the vm is booted
-func (hv *HVSockRegistryEntry) Listen() error {
+// ListenSetupWait creates an hvsock on the windows side and returns
+// a wait function that, when called, blocks until it receives a ready
+// notification on the vsock
+func (hv *HVSockRegistryEntry) ListenSetupWait() (func() error, io.Closer, error) {
 	listener, err := hv.Listener()
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer func() {
-		if err := listener.Close(); err != nil {
-			logrus.Error(err)
-		}
-	}()
 
 	errChan := make(chan error)
 	go sockets.ListenAndWaitOnSocket(errChan, listener)
-
-	return <-errChan
+	return func() error {
+		return <-errChan
+	}, listener, nil
 }

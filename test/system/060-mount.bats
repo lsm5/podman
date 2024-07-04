@@ -249,13 +249,10 @@ EOF
     reported_mountpoint=$(echo "$output" | awk '{print $2}')
     is "$reported_mountpoint" "$mount_path" "mountpoint reported by 'podman mount'"
 
-    # umount, and make sure files are gone
+    # umount, and make sure mountpoint no longer exists
     run_podman umount $external_cid
-    if [ -d "$mount_path" ]; then
-        # Under VFS, mountpoint always exists even despite umount
-        if [[ "$(podman_storage_driver)" != "vfs" ]]; then
-            die "'podman umount' did not umount $mount_path"
-        fi
+    if findmnt "$mount_path" >/dev/null ; then
+        die "'podman umount' did not umount $mount_path"
     fi
     buildah rm $external_cid
 }
@@ -286,17 +283,18 @@ EOF
     is "$output" ".*$v1a" "podman images --inspect should include $v1a"
     is "$output" ".*$v1b" "podman images --inspect should include $v1b"
 
-    run_podman create --rm --mount type=glob,src=${PODMAN_TMPDIR}/v1\*,ro $IMAGE ls $vol1a $vol1b
+    run_podman create --mount type=glob,src=${PODMAN_TMPDIR}/v1\*,ro $IMAGE ls $vol1a $vol1b
     cid=$output
-    run_podman container inspect $output
+    run_podman container inspect $cid
     is "$output" ".*$vol1a" "podman images --inspect should include $vol1a"
     is "$output" ".*$vol1b" "podman images --inspect should include $vol1b"
+    run_podman rm $cid
 
-    run_podman 125 run --rm --mount source=${PODMAN_TMPDIR}/v2\*,type=bind,ro=false $IMAGE touch $vol2
+    run_podman 125 run --rm --mount type=bind,source=${PODMAN_TMPDIR}/v2\*,ro=false $IMAGE touch $vol2
     is "$output" "Error: must set volume destination" "Bind mounts require destination"
 
-    run_podman 125 run --rm --mount source=${PODMAN_TMPDIR}/v2\*,destination=/tmp/foobar, ro=false $IMAGE touch $vol2
-    is "$output" "Error: invalid reference format" "Default mounts don not support globs"
+    run_podman 125 run --rm --mount type=bind,source=${PODMAN_TMPDIR}/v2\*,destination=/tmp/foobar,ro=false $IMAGE touch $vol2
+    is "$output" "Error: statfs ${PODMAN_TMPDIR}/v2*: no such file or directory" "Bind mount should not interpret glob and must use as is"
 
     mkdir $PODMAN_TMPDIR/foo1 $PODMAN_TMPDIR/foo2 $PODMAN_TMPDIR/foo3
     touch $PODMAN_TMPDIR/foo1/bar $PODMAN_TMPDIR/foo2/bar $PODMAN_TMPDIR/foo3/bar
@@ -307,6 +305,7 @@ EOF
     is "$output" "bar1.*bar2.*bar3" "Should match multiple source files on single destination directory"
 }
 
+# bats test_tags=distro-integration
 @test "podman mount noswap memory mounts" {
     # tmpfs+noswap new in kernel 6.x, mid-2023; likely not in RHEL for a while
     if ! is_rootless; then

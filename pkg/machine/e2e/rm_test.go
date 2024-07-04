@@ -12,17 +12,6 @@ import (
 )
 
 var _ = Describe("podman machine rm", func() {
-	var (
-		mb      *machineTestBuilder
-		testDir string
-	)
-
-	BeforeEach(func() {
-		testDir, mb = setup()
-	})
-	AfterEach(func() {
-		teardown(originalHomeDir, testDir, mb)
-	})
 
 	It("bad init name", func() {
 		i := rmMachine{}
@@ -35,7 +24,7 @@ var _ = Describe("podman machine rm", func() {
 	It("Remove machine", func() {
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 		rm := rmMachine{}
@@ -59,7 +48,7 @@ var _ = Describe("podman machine rm", func() {
 	It("Remove running machine", func() {
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath).withNow()).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath).withNow()).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 		rm := new(rmMachine)
@@ -83,7 +72,7 @@ var _ = Describe("podman machine rm", func() {
 
 	It("machine rm --save-ignition --save-image", func() {
 		i := new(initMachine)
-		session, err := mb.setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -93,16 +82,6 @@ var _ = Describe("podman machine rm", func() {
 		Expect(err).ToNot(HaveOccurred())
 		key := inspectSession.outputToString()
 		pubkey := key + ".pub"
-
-		inspect = inspect.withFormat("{{.Image.IgnitionFile.Path}}")
-		inspectSession, err = mb.setCmd(inspect).run()
-		Expect(err).ToNot(HaveOccurred())
-		ign := inspectSession.outputToString()
-
-		inspect = inspect.withFormat("{{.Image.ImagePath.Path}}")
-		inspectSession, err = mb.setCmd(inspect).run()
-		Expect(err).ToNot(HaveOccurred())
-		img := inspectSession.outputToString()
 
 		rm := rmMachine{}
 		removeSession, err := mb.setCmd(rm.withForce().withSaveIgnition().withSaveImage()).run()
@@ -122,10 +101,11 @@ var _ = Describe("podman machine rm", func() {
 
 		// WSL does not use ignition
 		if testProvider.VMType() != define.WSLVirt {
-			_, err = os.Stat(ign)
+			ignPath := filepath.Join(testDir, ".config", "containers", "podman", "machine", testProvider.VMType().String(), mb.name+".ign")
+			_, err = os.Stat(ignPath)
 			Expect(err).ToNot(HaveOccurred())
 		}
-		_, err = os.Stat(img)
+		_, err = os.Stat(mb.imagePath)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -134,13 +114,13 @@ var _ = Describe("podman machine rm", func() {
 
 		fooName := "foo"
 		foo := new(initMachine)
-		session, err := mb.setName(fooName).setCmd(foo.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(fooName).setCmd(foo.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
 		barName := "bar"
 		bar := new(initMachine)
-		session, err = mb.setName(barName).setCmd(bar.withImagePath(mb.imagePath).withNow()).run()
+		session, err = mb.setName(barName).setCmd(bar.withImage(mb.imagePath).withNow()).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -174,7 +154,7 @@ var _ = Describe("podman machine rm", func() {
 	It("Removing all machines doesn't delete ssh keys", func() {
 		fooName := "foo"
 		foo := new(initMachine)
-		session, err := mb.setName(fooName).setCmd(foo.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(fooName).setCmd(foo.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 

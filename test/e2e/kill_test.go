@@ -1,10 +1,11 @@
 package integration
 
 import (
+	"path/filepath"
+
 	. "github.com/containers/podman/v5/test/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/onsi/gomega/gexec"
 )
 
 var _ = Describe("Podman kill", func() {
@@ -12,7 +13,7 @@ var _ = Describe("Podman kill", func() {
 	It("podman kill bogus container", func() {
 		session := podmanTest.Podman([]string{"kill", "foobar"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).To(ExitWithError())
+		Expect(session).To(ExitWithError(125, `no container with name or ID "foobar" found: no such container`))
 	})
 
 	It("podman container kill a running container by id", func() {
@@ -85,7 +86,7 @@ var _ = Describe("Podman kill", func() {
 
 		result := podmanTest.Podman([]string{"kill", "-s", "foobar", cid})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
+		Expect(result).Should(ExitWithError(125, "invalid signal: foobar"))
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
 	})
 
@@ -126,15 +127,14 @@ var _ = Describe("Podman kill", func() {
 	})
 
 	It("podman kill --cidfile", func() {
-		tmpDir := GinkgoT().TempDir()
-		tmpFile := tmpDir + "cid"
+		cidFile := filepath.Join(tempdir, "cid")
 
-		session := podmanTest.Podman([]string{"run", "-dt", "--cidfile", tmpFile, ALPINE, "top"})
+		session := podmanTest.Podman([]string{"run", "-dt", "--cidfile", cidFile, ALPINE, "top"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid := session.OutputToStringArray()[0]
 
-		kill := podmanTest.Podman([]string{"kill", "--cidfile", tmpFile})
+		kill := podmanTest.Podman([]string{"kill", "--cidfile", cidFile})
 		kill.WaitWithDefaultTimeout()
 		Expect(kill).Should(ExitCleanly())
 
@@ -144,23 +144,20 @@ var _ = Describe("Podman kill", func() {
 	})
 
 	It("podman kill multiple --cidfile", func() {
-		tmpDir1 := GinkgoT().TempDir()
-		tmpFile1 := tmpDir1 + "cid"
+		cidFile1 := filepath.Join(tempdir, "cid1")
+		cidFile2 := filepath.Join(tempdir, "cid2")
 
-		tmpDir2 := GinkgoT().TempDir()
-		tmpFile2 := tmpDir2 + "cid"
-
-		session := podmanTest.Podman([]string{"run", "-dt", "--cidfile", tmpFile1, ALPINE, "top"})
+		session := podmanTest.Podman([]string{"run", "-dt", "--cidfile", cidFile1, ALPINE, "top"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid1 := session.OutputToStringArray()[0]
 
-		session2 := podmanTest.Podman([]string{"run", "-dt", "--cidfile", tmpFile2, ALPINE, "top"})
+		session2 := podmanTest.Podman([]string{"run", "-dt", "--cidfile", cidFile2, ALPINE, "top"})
 		session2.WaitWithDefaultTimeout()
 		Expect(session2).Should(ExitCleanly())
 		cid2 := session2.OutputToStringArray()[0]
 
-		kill := podmanTest.Podman([]string{"kill", "--cidfile", tmpFile1, "--cidfile", tmpFile2})
+		kill := podmanTest.Podman([]string{"kill", "--cidfile", cidFile1, "--cidfile", cidFile2})
 		kill.WaitWithDefaultTimeout()
 		Expect(kill).Should(ExitCleanly())
 

@@ -11,6 +11,7 @@ import (
 
 	"errors"
 
+	"github.com/containers/buildah/copier"
 	"github.com/containers/buildah/define"
 	"github.com/containers/buildah/internal"
 	internalParse "github.com/containers/buildah/internal/parse"
@@ -189,7 +190,11 @@ func GetBindMount(ctx *types.SystemContext, args []string, contextDir string, st
 	// buildkit parity: support absolute path for sources from current build context
 	if contextDir != "" {
 		// path should be /contextDir/specified path
-		newMount.Source = filepath.Join(contextDir, filepath.Clean(string(filepath.Separator)+newMount.Source))
+		evaluated, err := copier.Eval(contextDir, newMount.Source, copier.EvalOptions{})
+		if err != nil {
+			return newMount, "", err
+		}
+		newMount.Source = evaluated
 	} else {
 		// looks like its coming from `build run --mount=type=bind` allow using absolute path
 		// error out if no source is set
@@ -235,11 +240,11 @@ func GetCacheMount(args []string, store storage.Store, imageMountLabel string, a
 	}
 	// if id is set a new subdirectory with `id` will be created under /host-temp/buildah-build-cache/id
 	id := ""
-	//buidkit parity: cache directory defaults to 755
+	// buildkit parity: cache directory defaults to 755
 	mode = 0o755
-	//buidkit parity: cache directory defaults to uid 0 if not specified
+	// buildkit parity: cache directory defaults to uid 0 if not specified
 	uid := 0
-	//buidkit parity: cache directory defaults to gid 0 if not specified
+	// buildkit parity: cache directory defaults to gid 0 if not specified
 	gid := 0
 	// sharing mode
 	sharing := "shared"
@@ -384,7 +389,7 @@ func GetCacheMount(args []string, store storage.Store, imageMountLabel string, a
 			UID: uid,
 			GID: gid,
 		}
-		//buildkit parity: change uid and gid if specified otheriwise keep `0`
+		// buildkit parity: change uid and gid if specified otheriwise keep `0`
 		err = idtools.MkdirAllAndChownNew(newMount.Source, os.FileMode(mode), idPair)
 		if err != nil {
 			return newMount, nil, fmt.Errorf("unable to change uid,gid of cache directory: %w", err)
@@ -602,7 +607,7 @@ func GetTmpfsMount(args []string) (specs.Mount, error) {
 			// Alias for "ro"
 			newMount.Options = append(newMount.Options, "ro")
 		case "tmpcopyup":
-			//the path that is shadowed by the tmpfs mount is recursively copied up to the tmpfs itself.
+			// the path that is shadowed by the tmpfs mount is recursively copied up to the tmpfs itself.
 			newMount.Options = append(newMount.Options, argName)
 		case "tmpfs-mode":
 			if !hasArgValue {

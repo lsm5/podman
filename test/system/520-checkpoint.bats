@@ -22,6 +22,14 @@ function setup() {
         skip "checkpoint does not work rootless"
     fi
 
+    # As of 2024-05, crun on Debian is not built with criu support:
+    # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1008249
+    runtime=$(podman_runtime)
+    run $runtime checkpoint --help
+    if [[ $status -ne 0 ]]; then
+        skip "runtime $runtime does not support checkpoint/restore"
+    fi
+
     basic_setup
 }
 
@@ -67,13 +75,19 @@ function teardown() {
     is "$output" "running:true:false:false" \
        "State. Status:Running:Pause:Checkpointed"
 
-    # Pause briefly to let restarted container emit some output
-    sleep 0.3
-
-    # Get full logs, and make sure something changed
-    run_podman logs $cid
-    local nlines_after="${#lines[*]}"
-    assert $nlines_after -gt $nlines_before \
+    # Re-fetch logs, and ensure that they continue growing.
+    # Allow a short while for container process to actually restart.
+    local retries=10
+    while [[ $retries -gt 0 ]]; do
+        run_podman logs $cid
+        local nlines_after="${#lines[*]}"
+        if [[ $nlines_after -gt $nlines_before ]]; then
+            break
+        fi
+        sleep 0.1
+        retries=$((retries - 1))
+    done
+    assert "$retries" -gt 0 \
            "Container failed to output new lines after first restore"
 
     # Same thing again: test for https://github.com/containers/crun/issues/756
@@ -83,12 +97,18 @@ function teardown() {
     nlines_before="${#lines[*]}"
     run_podman container restore $cid
 
-    # Give container time to write new output; then confirm that something
-    # was emitted
-    sleep 0.3
-    run_podman container logs $cid
-    nlines_after="${#lines[*]}"
-    assert $nlines_after -gt $nlines_before \
+    # Same as above, confirm that we get new output
+    retries=10
+    while [[ $retries -gt 0 ]]; do
+        run_podman logs $cid
+        local nlines_after="${#lines[*]}"
+        if [[ $nlines_after -gt $nlines_before ]]; then
+            break
+        fi
+        sleep 0.1
+        retries=$((retries - 1))
+    done
+    assert "$retries" -gt 0 \
            "stdout went away after second restore (crun issue 756)"
 
     run_podman rm -t 0 -f $cid
@@ -208,6 +228,8 @@ function teardown() {
     run_podman logs $cid
     trim=$(sed -z -e 's/[\r\n]\+//g' <<<"$output")
     is "$trim" "READY123123" "File lock restored"
+
+    run_podman rm $cid
 }
 
 @test "podman checkpoint/restore ip and mac handling" {
@@ -225,6 +247,9 @@ function teardown() {
     run_podman inspect $cid --format "{{(index .NetworkSettings.Networks \"$netname\").MacAddress}}"
     mac1="$output"
 
+    run_podman exec $cid cat /etc/hosts /etc/resolv.conf
+    pre_hosts_resolv_conf_output="$output"
+
     run_podman container checkpoint $cid
     is "$output" "$cid"
     run_podman container restore $cid
@@ -235,6 +260,10 @@ function teardown() {
     ip2="$output"
     run_podman inspect $cid --format "{{(index .NetworkSettings.Networks \"$netname\").MacAddress}}"
     mac2="$output"
+
+    # Make sure hosts and resolv.conf are the same after restore (#22901)
+    run_podman exec $cid cat /etc/hosts /etc/resolv.conf
+    assert "$output" == "$pre_hosts_resolv_conf_output" "hosts/resolv.conf must be the same after checkpoint"
 
     assert "$ip2" == "$ip1" "ip after restore should match"
     assert "$mac2" == "$mac1" "mac after restore should match"

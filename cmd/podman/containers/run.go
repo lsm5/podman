@@ -150,7 +150,7 @@ func run(cmd *cobra.Command, args []string) error {
 	rawImageName := ""
 	if !cliVals.RootFS {
 		rawImageName = args[0]
-		name, err := PullImage(args[0], &cliVals)
+		name, err := pullImage(cmd, args[0], &cliVals)
 		if err != nil {
 			return err
 		}
@@ -173,7 +173,7 @@ func run(cmd *cobra.Command, args []string) error {
 		runOpts.InputStream = nil
 	}
 
-	passthrough := cliVals.LogDriver == define.PassthroughLogging
+	passthrough := cliVals.LogDriver == define.PassthroughLogging || cliVals.LogDriver == define.PassthroughTTYLogging
 
 	// If attach is set, clear stdin/stdout/stderr and only attach requested
 	if cmd.Flag("attach").Changed {

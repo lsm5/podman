@@ -2,6 +2,7 @@ package integration
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	. "github.com/containers/podman/v5/test/utils"
@@ -15,7 +16,7 @@ var _ = Describe("Podman restart", func() {
 	It("podman restart bogus container", func() {
 		session := podmanTest.Podman([]string{"start", "123"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
+		Expect(session).Should(ExitWithError(125, `no container with name or ID "123" found: no such container`))
 	})
 
 	It("podman restart stopped container by name", func() {
@@ -192,12 +193,13 @@ var _ = Describe("Podman restart", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 
-		testCmd := []string{"exec", "host-restart-test", "sh", "-c", "wc -l < /etc/hosts"}
+		testCmd := []string{"exec", "host-restart-test", "cat", "/etc/hosts"}
 
 		// before restart
 		beforeRestart := podmanTest.Podman(testCmd)
 		beforeRestart.WaitWithDefaultTimeout()
 		Expect(beforeRestart).Should(ExitCleanly())
+		nHostLines := len(beforeRestart.OutputToStringArray())
 
 		session = podmanTest.Podman([]string{"restart", "host-restart-test"})
 		session.WaitWithDefaultTimeout()
@@ -208,7 +210,8 @@ var _ = Describe("Podman restart", func() {
 		Expect(afterRestart).Should(ExitCleanly())
 
 		// line count should be equal
-		Expect(beforeRestart.OutputToString()).To(Equal(afterRestart.OutputToString()))
+		Expect(afterRestart.OutputToStringArray()).To(HaveLen(nHostLines),
+			"number of host lines post-restart == number of lines pre-restart")
 	})
 
 	It("podman restart all stopped containers with --all", func() {
@@ -232,10 +235,9 @@ var _ = Describe("Podman restart", func() {
 	})
 
 	It("podman restart --cidfile", func() {
-		tmpDir := GinkgoT().TempDir()
-		tmpFile := tmpDir + "cid"
+		cidFile := filepath.Join(tempdir, "cid")
 
-		session := podmanTest.Podman([]string{"create", "--cidfile", tmpFile, ALPINE, "top"})
+		session := podmanTest.Podman([]string{"create", "--cidfile", cidFile, ALPINE, "top"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid := session.OutputToStringArray()[0]
@@ -244,7 +246,7 @@ var _ = Describe("Podman restart", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 
-		result := podmanTest.Podman([]string{"restart", "--cidfile", tmpFile})
+		result := podmanTest.Podman([]string{"restart", "--cidfile", cidFile})
 		result.WaitWithDefaultTimeout()
 		// FIXME - #20196: Cannot use ExitCleanly()
 		Expect(result).Should(Exit(0))
@@ -253,23 +255,22 @@ var _ = Describe("Podman restart", func() {
 	})
 
 	It("podman restart multiple --cidfile", func() {
-		tmpDir := GinkgoT().TempDir()
-		tmpFile1 := tmpDir + "cid-1"
-		tmpFile2 := tmpDir + "cid-2"
+		cidFile1 := filepath.Join(tempdir, "cid-1")
+		cidFile2 := filepath.Join(tempdir, "cid-2")
 
-		session := podmanTest.Podman([]string{"run", "--cidfile", tmpFile1, "-d", ALPINE, "top"})
+		session := podmanTest.Podman([]string{"run", "--cidfile", cidFile1, "-d", ALPINE, "top"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid1 := session.OutputToStringArray()[0]
 		Expect(podmanTest.NumberOfContainers()).To(Equal(1))
 
-		session = podmanTest.Podman([]string{"run", "--cidfile", tmpFile2, "-d", ALPINE, "top"})
+		session = podmanTest.Podman([]string{"run", "--cidfile", cidFile2, "-d", ALPINE, "top"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid2 := session.OutputToStringArray()[0]
 		Expect(podmanTest.NumberOfContainers()).To(Equal(2))
 
-		result := podmanTest.Podman([]string{"restart", "--cidfile", tmpFile1, "--cidfile", tmpFile2})
+		result := podmanTest.Podman([]string{"restart", "--cidfile", cidFile1, "--cidfile", cidFile2})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(ExitCleanly())
 		output := result.OutputToString()
@@ -282,20 +283,19 @@ var _ = Describe("Podman restart", func() {
 		SkipIfRemote("--latest flag n/a")
 		result := podmanTest.Podman([]string{"restart", "--cidfile", "foobar", "--latest"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all, --latest, and --cidfile cannot be used together"))
+
 		result = podmanTest.Podman([]string{"restart", "--cidfile", "foobar", "--all"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all, --latest, and --cidfile cannot be used together"))
+
 		result = podmanTest.Podman([]string{"restart", "--cidfile", "foobar", "--all", "--latest"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all, --latest, and --cidfile cannot be used together"))
+
 		result = podmanTest.Podman([]string{"restart", "--latest", "--all"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all and --latest cannot be used together"))
 	})
 
 	It("podman restart --filter", func() {
@@ -317,7 +317,7 @@ var _ = Describe("Podman restart", func() {
 
 		session1 = podmanTest.Podman([]string{"restart", cid1, "-f", "status=test"})
 		session1.WaitWithDefaultTimeout()
-		Expect(session1).Should(Exit(125))
+		Expect(session1).Should(ExitWithError(125, "--filter takes no arguments"))
 
 		session1 = podmanTest.Podman([]string{"restart", "-a", "--filter", fmt.Sprintf("id=%swrongid", shortCid3)})
 		session1.WaitWithDefaultTimeout()

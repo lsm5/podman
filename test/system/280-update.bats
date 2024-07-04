@@ -90,12 +90,20 @@ device-write-iops   = /dev/zero:4000 | - | -                                    
             fi
         fi
 
+        # Determine the "path = newvalue" string for this cgroup
         tuple=$cgv1
         if is_cgroupsv2; then
             tuple=$cgv2
         fi
         if [[ $tuple = '-' ]]; then
             echo "[ skipping --$opt : N/A on cgroups v$cgv ]"
+            continue
+        fi
+
+        # Sigh. bfq doesn't exist on Debian (2024-03)
+        read path op expect <<<"$tuple"
+        if [[ ! -e /sys/fs/cgroup/$path ]]; then
+            echo "[ skipping --$opt : /sys/fs/cgroup/$path does not exist ]"
             continue
         fi
 
@@ -109,6 +117,7 @@ device-write-iops   = /dev/zero:4000 | - | -                                    
     run_podman update "${opts[@]}" $cid
 
     # ...and check one by one
+    defer-assertion-failures
     for opt in "${opts[@]}"; do
         read path op expect <<<"${check[$opt]}"
         run_podman exec $cid cat /sys/fs/cgroup/$path
@@ -118,6 +127,7 @@ device-write-iops   = /dev/zero:4000 | - | -                                    
         updated="$(echo $output)"
         assert "$updated" $op "$expect" "$opt ($path)"
     done
+    immediate-assertion-failures
 
     # Clean up
     run_podman rm -f -t0 $cid
@@ -125,6 +135,30 @@ device-write-iops   = /dev/zero:4000 | - | -                                    
         losetup -d $LOOPDEVICE
         LOOPDEVICE=
     fi
+}
+
+@test "podman update - set restart policy" {
+    touch ${PODMAN_TMPDIR}/sentinel
+    run_podman run --security-opt label=disable --name testctr -v ${PODMAN_TMPDIR}:/testdir -d $IMAGE sh -c "touch /testdir/alive; while test -e /testdir/sentinel; do sleep 0.1; done;"
+
+    run_podman container inspect testctr --format "{{ .HostConfig.RestartPolicy.Name }}"
+    is "$output" "no"
+
+    run_podman update --restart always testctr
+
+    run_podman container inspect testctr --format "{{ .HostConfig.RestartPolicy.Name }}"
+    is "$output" "always"
+
+    # Ensure the container is alive
+    wait_for_file ${PODMAN_TMPDIR}/alive
+
+    rm -f ${PODMAN_TMPDIR}/alive
+    rm -f ${PODMAN_TMPDIR}/sentinel
+
+    # Restart should ensure that the container comes back up and recreates the file
+    wait_for_file ${PODMAN_TMPDIR}/alive
+
+    run_podman rm -f -t0 testctr
 }
 
 # vim: filetype=sh

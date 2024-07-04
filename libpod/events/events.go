@@ -90,6 +90,9 @@ func (e *Event) ToHumanReadable(truncate bool) string {
 		humanFormat = fmt.Sprintf("%s %s %s %s (container=%s, name=%s)", e.Time, e.Type, e.Status, id, id, e.Network)
 	case Image:
 		humanFormat = fmt.Sprintf("%s %s %s %s %s", e.Time, e.Type, e.Status, id, e.Name)
+		if e.Error != "" {
+			humanFormat += " " + e.Error
+		}
 	case System:
 		if e.Name != "" {
 			humanFormat = fmt.Sprintf("%s %s %s %s", e.Time, e.Type, e.Status, e.Name)
@@ -102,7 +105,7 @@ func (e *Event) ToHumanReadable(truncate bool) string {
 	return humanFormat
 }
 
-// NewEventFromString takes stringified json and converts
+// newEventFromJSONString takes stringified json and converts
 // it to an event
 func newEventFromJSONString(event string) (*Event, error) {
 	e := new(Event)
@@ -194,6 +197,8 @@ func StringToStatus(name string) (Status, error) {
 		return Prune, nil
 	case Pull.String():
 		return Pull, nil
+	case PullError.String():
+		return PullError, nil
 	case Push.String():
 		return Push, nil
 	case Refresh.String():
@@ -226,6 +231,8 @@ func StringToStatus(name string) (Status, error) {
 		return Unpause, nil
 	case Untag.String():
 		return Untag, nil
+	case Update.String():
+		return Update, nil
 	}
 	return "", fmt.Errorf("unknown event status %q", name)
 }

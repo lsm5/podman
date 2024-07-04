@@ -5,16 +5,19 @@ package wsl
 import (
 	"errors"
 	"fmt"
-	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/containers/podman/v5/pkg/machine"
+	"github.com/containers/podman/v5/pkg/machine/env"
+	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
 	"github.com/containers/podman/v5/pkg/machine/wsl/wutil"
 	"github.com/containers/podman/v5/pkg/specgen"
 	"github.com/sirupsen/logrus"
 )
+
+const gvForwarderPath = "/usr/libexec/podman/gvforwarder"
 
 const startUserModeNet = `
 set -e
@@ -29,10 +32,10 @@ fi
 if [[ ! $ROUTE =~ default\ via ]]; then
 	exit 3
 fi
-nohup /usr/local/bin/vm -iface podman-usermode -stop-if-exist ignore -url "stdio:$GVPROXY?listen-stdio=accept" > /var/log/vm.log 2> /var/log/vm.err  < /dev/null &
+nohup $GVFORWARDER -iface podman-usermode -stop-if-exist ignore -url "stdio:$GVPROXY?listen-stdio=accept" > /var/log/vm.log 2> /var/log/vm.err  < /dev/null &
 echo $! > $STATE/vm.pid
 sleep 1
-ps -eo args | grep -q -m1 ^/usr/local/bin/vm || exit 42
+ps -eo args | grep -q -m1 ^$GVFORWARDER || exit 42
 `
 
 const stopUserModeNet = `
@@ -84,7 +87,9 @@ func startUserModeNetworking(mc *vmconfigs.MachineConfig) error {
 	if err != nil {
 		return err
 	}
-	defer flock.unlock()
+	defer func() {
+		_ = flock.unlock()
+	}()
 
 	running, err := isWSLRunning(userModeDist)
 	if err != nil {
@@ -99,7 +104,7 @@ func startUserModeNetworking(mc *vmconfigs.MachineConfig) error {
 		}
 	}
 
-	if err := createUserModeResolvConf(machine.ToDist(mc.Name)); err != nil {
+	if err := createUserModeResolvConf(env.WithPodmanPrefix(mc.Name)); err != nil {
 		return err
 	}
 
@@ -121,7 +126,9 @@ func stopUserModeNetworking(mc *vmconfigs.MachineConfig) error {
 	if err != nil {
 		return err
 	}
-	defer flock.unlock()
+	defer func() {
+		_ = flock.unlock()
+	}()
 
 	err = removeUserModeNetEntry(mc.Name)
 	if err != nil {
@@ -157,7 +164,8 @@ func stopUserModeNetworking(mc *vmconfigs.MachineConfig) error {
 }
 
 func isGvProxyVMRunning() bool {
-	return wslInvoke(userModeDist, "bash", "-c", "ps -eo args | grep -q -m1 ^/usr/local/bin/vm || exit 42") == nil
+	cmd := fmt.Sprintf("ps -eo args | grep -q -m1 ^%s || exit 42", gvForwarderPath)
+	return wslInvoke(userModeDist, "bash", "-c", cmd) == nil
 }
 
 func launchUserModeNetDist(exeFile string) error {
@@ -168,7 +176,7 @@ func launchUserModeNetDist(exeFile string) error {
 		return err
 	}
 
-	cmdStr := fmt.Sprintf("GVPROXY=%q\n%s", exe, startUserModeNet)
+	cmdStr := fmt.Sprintf("GVPROXY=%q\nGVFORWARDER=%q\n%s", exe, gvForwarderPath, startUserModeNet)
 	if err := wslPipe(cmdStr, userModeDist, "bash"); err != nil {
 		_ = terminateDist(userModeDist)
 
@@ -197,8 +205,19 @@ func installUserModeDist(dist string, imagePath string) error {
 		return err
 	}
 
+	if exists {
+		if err := wslInvoke(userModeDist, "test", "-f", gvForwarderPath); err != nil {
+			fmt.Println("Replacing old user-mode distribution...")
+			_ = terminateDist(userModeDist)
+			if err := unregisterDist(userModeDist); err != nil {
+				return err
+			}
+			exists = false
+		}
+	}
+
 	if !exists {
-		if err := wslInvoke(dist, "test", "-f", "/usr/local/bin/vm"); err != nil {
+		if err := wslInvoke(dist, "test", "-f", gvForwarderPath); err != nil {
 			return fmt.Errorf("existing machine is too old, can't install user-mode networking dist until machine is reinstalled (using podman machine rm, then podman machine init)")
 		}
 
@@ -222,7 +241,7 @@ func createUserModeResolvConf(dist string) error {
 }
 
 func getUserModeNetDir() (string, error) {
-	vmDataDir, err := machine.GetDataDir(vmtype)
+	vmDataDir, err := env.GetDataDir(vmtype)
 	if err != nil {
 		return "", err
 	}
@@ -255,7 +274,7 @@ func addUserModeNetEntry(mc *vmconfigs.MachineConfig) error {
 		return err
 	}
 
-	path := filepath.Join(entriesDir, machine.ToDist(mc.Name))
+	path := filepath.Join(entriesDir, env.WithPodmanPrefix(mc.Name))
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("could not add user-mode networking registration: %w", err)
@@ -270,7 +289,7 @@ func removeUserModeNetEntry(name string) error {
 		return err
 	}
 
-	path := filepath.Join(entriesDir, machine.ToDist(name))
+	path := filepath.Join(entriesDir, env.WithPodmanPrefix(name))
 	return os.Remove(path)
 }
 
@@ -322,7 +341,7 @@ func obtainUserModeNetLock() (*fileLock, error) {
 func changeDistUserModeNetworking(dist string, user string, image string, enable bool) error {
 	// Only install if user-mode is being enabled and there was an image path passed
 	if enable {
-		if len(image) <= 0 {
+		if len(image) == 0 {
 			return errors.New("existing machine configuration is corrupt, no image is defined")
 		}
 		if err := installUserModeDist(dist, image); err != nil {

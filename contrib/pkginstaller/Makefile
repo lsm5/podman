@@ -8,25 +8,31 @@ else
 endif
 GVPROXY_VERSION ?= 0.7.3
 VFKIT_VERSION ?= 0.5.1
+KRUNKIT_VERSION ?= 0.1.1
 GVPROXY_RELEASE_URL ?= https://github.com/containers/gvisor-tap-vsock/releases/download/v$(GVPROXY_VERSION)/gvproxy-darwin
 VFKIT_RELEASE_URL ?= https://github.com/crc-org/vfkit/releases/download/v$(VFKIT_VERSION)/vfkit-unsigned
+KRUNKIT_RELEASE_URL ?= https://github.com/containers/krunkit/releases/download/v$(KRUNKIT_VERSION)/krunkit-podman-unsigned-$(KRUNKIT_VERSION).tgz
 PACKAGE_DIR ?= out/packaging
-TMP_DOWNLOAD ?= tmp-download
+TMP_BIN ?= tmp-bin
 PACKAGE_ROOT ?= root
 PKG_NAME := podman-installer-macos-$(GOARCH).pkg
 
 default: pkginstaller
 
 podman_version:
-	make -C ../../ test/version/version
+	make -B -C ../../ test/version/version
 
-$(TMP_DOWNLOAD)/gvproxy:
-	mkdir -p $(TMP_DOWNLOAD)
-	cd $(TMP_DOWNLOAD) && curl -sLo gvproxy $(GVPROXY_RELEASE_URL)
+$(TMP_BIN)/gvproxy:
+	mkdir -p $(TMP_BIN)
+	cd $(TMP_BIN) && curl -sLo gvproxy $(GVPROXY_RELEASE_URL)
 
-$(TMP_DOWNLOAD)/vfkit:
-	mkdir -p $(TMP_DOWNLOAD)
-	cd $(TMP_DOWNLOAD) && curl -sLo vfkit $(VFKIT_RELEASE_URL)
+$(TMP_BIN)/vfkit:
+	mkdir -p $(TMP_BIN)
+	cd $(TMP_BIN) && curl -sLo vfkit $(VFKIT_RELEASE_URL)
+
+$(TMP_BIN)/krunkit.tgz:
+	mkdir -p $(TMP_BIN)
+	cd $(TMP_BIN) && curl -sLo krunkit.tgz $(KRUNKIT_RELEASE_URL)
 
 packagedir: podman_version package_root Distribution welcome.html
 	mkdir -p $(PACKAGE_DIR)
@@ -40,13 +46,18 @@ packagedir: podman_version package_root Distribution welcome.html
 	../../test/version/version > $(PACKAGE_DIR)/VERSION
 	echo -n $(ARCH) > $(PACKAGE_DIR)/ARCH
 	cp ../../LICENSE $(PACKAGE_DIR)/Resources/LICENSE.txt
-	cp hvf.entitlements $(PACKAGE_DIR)/
+	cp vfkit.entitlements $(PACKAGE_DIR)/
+	cp krunkit.entitlements $(PACKAGE_DIR)/
 
-package_root: clean-pkgroot $(TMP_DOWNLOAD)/gvproxy $(TMP_DOWNLOAD)/vfkit
+package_root: clean-pkgroot $(TMP_BIN)/gvproxy $(TMP_BIN)/vfkit $(TMP_BIN)/krunkit.tgz
 	mkdir -p $(PACKAGE_ROOT)/podman/bin
-	cp $(TMP_DOWNLOAD)/gvproxy $(PACKAGE_ROOT)/podman/bin/
-	cp $(TMP_DOWNLOAD)/vfkit $(PACKAGE_ROOT)/podman/bin/
+	cp $(TMP_BIN)/gvproxy $(PACKAGE_ROOT)/podman/bin/
+	cp $(TMP_BIN)/vfkit $(PACKAGE_ROOT)/podman/bin/
+	tar xf $(TMP_BIN)/krunkit.tgz -C $(PACKAGE_ROOT)/podman
 	chmod a+x $(PACKAGE_ROOT)/podman/bin/*
+	# Leaving for future considerations
+	# mkdir $(PACKAGE_ROOT)/podman/config
+	# cp ../../pkg/machine/ocipull/policy.json $(PACKAGE_ROOT)/podman/config/policy.json
 
 %: %.in podman_version
 	@sed -e 's/__VERSION__/'$(shell ../../test/version/version)'/g' $< >$@
@@ -62,7 +73,7 @@ notarize: _notarize
 
 .PHONY: clean clean-pkgroot
 clean:
-	rm -rf $(TMP_DOWNLOAD) $(PACKAGE_ROOT) $(PACKAGE_DIR) Distribution welcome.html ../../test/version/version
+	rm -rf $(TMP_BIN) $(PACKAGE_ROOT) $(PACKAGE_DIR) out Distribution welcome.html ../../test/version/version
 
 clean-pkgroot:
 	rm -rf $(PACKAGE_ROOT) $(PACKAGE_DIR) Distribution welcome.html

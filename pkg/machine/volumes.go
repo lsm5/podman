@@ -1,10 +1,16 @@
 package machine
 
 import (
-	"strings"
+	"crypto/sha256"
+	"encoding/hex"
 
 	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
 )
+
+// NFSSELinuxContext is what is used by NFS mounts, which is allowed
+// access by container_t.  We need to fix the Fedora selinux policy
+// to just allow access to virtiofs_t.
+const NFSSELinuxContext = "system_u:object_r:nfs_t:s0"
 
 type Volume interface {
 	Kind() VolumeKind
@@ -29,14 +35,13 @@ func (v VirtIoFs) Kind() string {
 	return string(VirtIOFsVk)
 }
 
-// unitName is the fq path where /'s are replaced with -'s
-func (v VirtIoFs) unitName() string {
-	// delete the leading -
-	unit := strings.ReplaceAll(v.Target, "/", "-")
-	if strings.HasPrefix(unit, "-") {
-		return unit[1:]
-	}
-	return unit
+// generateTag generates a tag for VirtIOFs mounts.
+// AppleHV requires tags to be 36 bytes or fewer.
+// SHA256 the path, then truncate to 36 bytes
+func (v VirtIoFs) generateTag() string {
+	sum := sha256.Sum256([]byte(v.Target))
+	stringSum := hex.EncodeToString(sum[:])
+	return stringSum[:36]
 }
 
 func (v VirtIoFs) ToMount() vmconfigs.Mount {
@@ -58,7 +63,7 @@ func NewVirtIoFsMount(src, target string, readOnly bool) VirtIoFs {
 		Source:   src,
 		Target:   target,
 	}
-	vfs.Tag = vfs.unitName()
+	vfs.Tag = vfs.generateTag()
 	return vfs
 }
 

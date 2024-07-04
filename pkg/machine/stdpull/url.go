@@ -14,6 +14,7 @@ import (
 	"github.com/containers/podman/v5/pkg/machine/compression"
 	"github.com/containers/podman/v5/pkg/machine/define"
 	"github.com/containers/podman/v5/utils"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -21,9 +22,10 @@ type DiskFromURL struct {
 	u            *url2.URL
 	finalPath    *define.VMFile
 	tempLocation *define.VMFile
+	cache        bool
 }
 
-func NewDiskFromURL(inputPath string, finalPath *define.VMFile, tempDir *define.VMFile, optionalTempFileName *string) (*DiskFromURL, error) {
+func NewDiskFromURL(inputPath string, finalPath *define.VMFile, tempDir *define.VMFile, optionalTempFileName *string, cache bool) (*DiskFromURL, error) {
 	var (
 		err error
 	)
@@ -33,7 +35,7 @@ func NewDiskFromURL(inputPath string, finalPath *define.VMFile, tempDir *define.
 	}
 
 	// Make sure the temporary location exists before we get too deep
-	if _, err := os.Stat(tempDir.GetPath()); err != nil {
+	if err := fileutils.Exists(tempDir.GetPath()); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("temporary download directory %s does not exist", tempDir.GetPath())
 		}
@@ -56,6 +58,7 @@ func NewDiskFromURL(inputPath string, finalPath *define.VMFile, tempDir *define.
 		u:            u,
 		finalPath:    finalPath,
 		tempLocation: tempLocation,
+		cache:        cache,
 	}, nil
 }
 
@@ -64,6 +67,16 @@ func (d *DiskFromURL) Get() error {
 	if err := d.pull(); err != nil {
 		return err
 	}
+	if !d.cache {
+		defer func() {
+			if err := utils.GuardedRemoveAll(d.tempLocation.GetPath()); err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					logrus.Warn("failed to clean machine image cache: ", err)
+				}
+			}
+		}()
+	}
+
 	logrus.Debugf("decompressing (if needed) %s to %s", d.tempLocation.GetPath(), d.finalPath.GetPath())
 	return compression.Decompress(d.tempLocation, d.finalPath.GetPath())
 }

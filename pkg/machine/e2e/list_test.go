@@ -1,6 +1,8 @@
 package e2e_test
 
 import (
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -9,21 +11,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
-	"golang.org/x/exp/slices"
 )
 
 var _ = Describe("podman machine list", func() {
-	var (
-		mb      *machineTestBuilder
-		testDir string
-	)
-
-	BeforeEach(func() {
-		testDir, mb = setup()
-	})
-	AfterEach(func() {
-		teardown(originalHomeDir, testDir, mb)
-	})
 
 	It("list machine", func() {
 		list := new(listMachine)
@@ -33,7 +23,7 @@ var _ = Describe("podman machine list", func() {
 		Expect(firstList.outputToStringSlice()).To(HaveLen(1)) // just the header
 
 		i := new(initMachine)
-		session, err := mb.setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -60,11 +50,11 @@ var _ = Describe("podman machine list", func() {
 		Expect(noheaderSession.outputToStringSlice()).To(BeEmpty())
 
 		i := new(initMachine)
-		session, err := mb.setName(name1).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name1).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
-		session2, err := mb.setName(name2).setCmd(i.withImagePath(mb.imagePath)).run()
+		session2, err := mb.setName(name2).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session2).To(Exit(0))
 
@@ -82,7 +72,7 @@ var _ = Describe("podman machine list", func() {
 	It("list machine: check if running while starting", func() {
 		skipIfWSL("the below logic does not work on WSL.  #20978")
 		i := new(initMachine)
-		session, err := mb.setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -123,7 +113,7 @@ var _ = Describe("podman machine list", func() {
 		name1 := randomString()
 
 		i := new(initMachine)
-		session, err := mb.setName(name1).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name1).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -157,6 +147,40 @@ var _ = Describe("podman machine list", func() {
 		Expect(listSession3).To(Exit(0))
 		listNames3 := listSession3.outputToStringSlice()
 		Expect(listNames3).To(HaveLen(2))
+	})
+	It("list machine in machine-readable byte format", func() {
+		i := new(initMachine)
+		session, err := mb.setCmd(i.withImage(mb.imagePath)).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(session).To(Exit(0))
+
+		list := new(listMachine)
+		list = list.withFormat(("json"))
+		listSession, err := mb.setCmd(list).run()
+		Expect(err).NotTo(HaveOccurred())
+		var listResponse []*entities.ListReporter
+		err = jsoniter.Unmarshal(listSession.Bytes(), &listResponse)
+		Expect(err).NotTo(HaveOccurred())
+		for _, reporter := range listResponse {
+			memory, err := strconv.Atoi(reporter.Memory)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(memory).To(BeNumerically(">", 2000000000)) // 2GiB
+			diskSize, err := strconv.Atoi(reporter.DiskSize)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(diskSize).To(BeNumerically(">", 11000000000)) // 11GiB
+		}
+	})
+	It("list machine in human-readable format", func() {
+		i := new(initMachine)
+		session, err := mb.setCmd(i.withImage(mb.imagePath)).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(session).To(Exit(0))
+
+		list := new(listMachine)
+		listSession, err := mb.setCmd(list.withFormat("{{.Memory}} {{.DiskSize}}")).run()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listSession).To(Exit(0))
+		Expect(listSession.outputToString()).To(Equal("2GiB 11GiB"))
 	})
 })
 

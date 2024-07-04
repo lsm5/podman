@@ -419,7 +419,7 @@ EOF
 
     myvolume=myvol$(random_string)
     run_podman 125 volume create -o type=bind -o device=/bogus $myvolume
-    is "$output" "Error: invalid volume option device for driver 'local': stat /bogus: no such file or directory" "should fail with bogus directory not existing"
+    is "$output" "Error: invalid volume option device for driver 'local': faccessat /bogus: no such file or directory" "should fail with bogus directory not existing"
 
     run_podman volume create -o type=bind -o device=/$myvoldir $myvolume
     is "$output" "$myvolume" "should successfully create myvolume"
@@ -467,11 +467,13 @@ NeedsChown    | true
     run_podman volume inspect --format '{{ .NeedsCopyUp }}' $myvolume
     is "${output}" "true" "If content in dest '/vol' empty NeedsCopyUP should still be true"
     run_podman volume inspect --format '{{ .NeedsChown }}' $myvolume
-    is "${output}" "false" "After first use within a container NeedsChown should still be false"
+    is "${output}" "true" "No copy up occurred so the NeedsChown will still be true"
 
     run_podman run --rm --volume $myvolume:/etc $IMAGE ls /etc/passwd
     run_podman volume inspect --format '{{ .NeedsCopyUp }}' $myvolume
     is "${output}" "false" "If content in dest '/etc' non-empty NeedsCopyUP should still have happened and be false"
+    run_podman volume inspect --format '{{ .NeedsChown }}' $myvolume
+    is "${output}" "false" "Content has been copied up into volume, needschown will be false"
 
     run_podman volume inspect --format '{{.Mountpoint}}' $myvolume
     mountpoint="$output"
@@ -532,8 +534,15 @@ EOF
     CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm volume_image stat -f -c %T /data
     is "$output" "tmpfs" "Should be tmpfs"
 
-    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --image-volume anonymous --rm volume_image stat -f -c %T /data
-    assert "$output" != "tmpfs" "Should match hosts $fs"
+    # get the hostfs first so we can match it below
+    run_podman info --format {{.Store.GraphRoot}}
+    hostfs=$(stat -f -c %T $output)
+
+    # stat -f -c %T seems to just return unknown for our normal bind mount for some reason.
+    # Therfore manually parse /proc/mounts to get the real fs for the bind mount.
+    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --image-volume anonymous --rm volume_image \
+        sh -c "grep ' /data ' /proc/mounts | cut -f3 -d' '"
+    assert "$output" == "$hostfs" "Should match hosts graphroot fs"
 
     CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --image-volume tmpfs --rm volume_image stat -f -c %T /data
     is "$output" "tmpfs" "Should be tmpfs"
@@ -550,6 +559,13 @@ EOF
     is "$output" "Error: no volume with name \"bogus\" found: no such volume" "Should print error"
     run_podman volume rm --force bogus
     is "$output" "" "Should print no output"
+
+    run_podman volume create testvol
+    run_podman volume rm --force bogus testvol
+    assert "$output" = "testvol" "removed volume"
+
+    run_podman volume ls -q
+    assert "$output" = "" "no volumes"
 }
 
 @test "podman ps -f" {

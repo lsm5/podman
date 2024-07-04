@@ -15,6 +15,7 @@ function teardown() {
     # annotations and image digests may be different. See
     # https://github.com/containers/podman/discussions/17911
     run_podman rmi -a -f
+    _prefetch $IMAGE
 
     basic_teardown
 }
@@ -88,9 +89,11 @@ verify_iid_and_name() {
         skip "impossible due to pitfalls in our SSH implementation"
     fi
 
-    # See https://github.com/containers/podman/pull/21431
-    if [[ -n "$PODMAN_IGNORE_CGROUPSV1_WARNING" ]]; then
-        skip "impossible to test due to pitfalls in our SSH implementation"
+    # FIXME: Broken on debian SID systemd 256 <= rc3
+    # See https://github.com/containers/podman/pull/23020#issuecomment-2179284640
+    OS_RELEASE_ID="${OS_RELEASE_ID:-$(source /etc/os-release; echo $ID)}"
+    if [[ "$OS_RELEASE_ID" == "debian" ]]; then
+        skip "broken warning about cgroup-manager=systemd and enabling linger"
     fi
 
     # The testing is the same whether we're root or rootless; all that

@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/containers/podman/v5/libpod/define"
 	. "github.com/containers/podman/v5/test/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/onsi/gomega/gexec"
 )
 
 var _ = Describe("Podman healthcheck run", func() {
@@ -18,7 +18,7 @@ var _ = Describe("Podman healthcheck run", func() {
 	It("podman healthcheck run bogus container", func() {
 		session := podmanTest.Podman([]string{"healthcheck", "run", "foobar"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).To(ExitWithError())
+		Expect(session).To(ExitWithError(125, `unable to look up foobar to perform a health check: no container with name or ID "foobar" found: no such container`))
 	})
 
 	It("podman disable healthcheck with --no-healthcheck on valid container", func() {
@@ -27,7 +27,7 @@ var _ = Describe("Podman healthcheck run", func() {
 		Expect(session).Should(ExitCleanly())
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(125))
+		Expect(hc).Should(ExitWithError(125, "has no defined healthcheck"))
 	})
 
 	It("podman disable healthcheck with --no-healthcheck must not show starting on status", func() {
@@ -71,7 +71,7 @@ var _ = Describe("Podman healthcheck run", func() {
 		hc := podmanTest.Podman([]string{"container", "inspect", "--format", "{{.Config.Healthcheck}}", "hc"})
 		hc.WaitWithDefaultTimeout()
 		Expect(hc).Should(ExitCleanly())
-		Expect(hc.OutputToString()).To(Equal("{[CMD-SHELL curl -f http://localhost/ || exit 1] 0s 5m0s 3s 0}"))
+		Expect(hc.OutputToString()).To(Equal("{[CMD-SHELL curl -f http://localhost/ || exit 1] 0s 0s 5m0s 3s 0}"))
 	})
 
 	It("podman disable healthcheck with --health-cmd=none on valid container", func() {
@@ -80,7 +80,7 @@ var _ = Describe("Podman healthcheck run", func() {
 		Expect(session).Should(ExitCleanly())
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(125))
+		Expect(hc).Should(ExitWithError(125, "has no defined healthcheck"))
 	})
 
 	It("podman healthcheck on valid container", func() {
@@ -116,7 +116,7 @@ var _ = Describe("Podman healthcheck run", func() {
 
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 	})
 
 	It("podman healthcheck on stopped container", func() {
@@ -126,7 +126,7 @@ var _ = Describe("Podman healthcheck run", func() {
 
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(125))
+		Expect(hc).Should(ExitWithError(125, "is not running"))
 	})
 
 	It("podman healthcheck on container without healthcheck", func() {
@@ -136,7 +136,7 @@ var _ = Describe("Podman healthcheck run", func() {
 
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(125))
+		Expect(hc).Should(ExitWithError(125, "has no defined healthcheck"))
 	})
 
 	It("podman healthcheck should be starting", func() {
@@ -154,15 +154,15 @@ var _ = Describe("Podman healthcheck run", func() {
 
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 
 		hc = podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 
 		hc = podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 
 		inspect := podmanTest.InspectContainer("hc")
 		Expect(inspect[0].State.Health).To(HaveField("Status", "starting"))
@@ -177,14 +177,14 @@ var _ = Describe("Podman healthcheck run", func() {
 
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 
 		inspect := podmanTest.InspectContainer("hc")
 		Expect(inspect[0].State.Health).To(HaveField("Status", "starting"))
 
 		hc = podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 
 		inspect = podmanTest.InspectContainer("hc")
 		Expect(inspect[0].State.Health).To(HaveField("Status", define.HealthCheckUnhealthy))
@@ -212,56 +212,78 @@ var _ = Describe("Podman healthcheck run", func() {
 
 		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 	})
 
-	It("podman healthcheck single healthy result changes failed to healthy", func() {
-		session := podmanTest.Podman([]string{"run", "-dt", "--name", "hc", "--health-retries", "2", "--health-cmd", "ls /foo || exit 1", ALPINE, "top"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(ExitCleanly())
+	// Run this test with and without healthcheck events, even without events
+	// podman inspect and ps should still show accurate healthcheck results.
+	for _, hcEvent := range []bool{true, false} {
+		hcEvent := hcEvent
+		testName := "hc_events=" + strconv.FormatBool(hcEvent)
+		It("podman healthcheck single healthy result changes failed to healthy "+testName, func() {
+			if !hcEvent {
+				path := filepath.Join(podmanTest.TempDir, "containers.conf")
+				err := os.WriteFile(path, []byte("[engine]\nhealthcheck_events=false\n"), 0o644)
+				Expect(err).ToNot(HaveOccurred())
+				err = os.Setenv("CONTAINERS_CONF_OVERRIDE", path)
+				Expect(err).ToNot(HaveOccurred())
+				if IsRemote() {
+					podmanTest.StopRemoteService()
+					podmanTest.StartRemoteService()
+				}
+			}
 
-		hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
-		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+			session := podmanTest.Podman([]string{"run", "-dt", "--name", "hc", "--health-retries", "2", "--health-cmd", "ls /foo || exit 1", ALPINE, "top"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(ExitCleanly())
 
-		inspect := podmanTest.InspectContainer("hc")
-		Expect(inspect[0].State.Health).To(HaveField("Status", "starting"))
+			hc := podmanTest.Podman([]string{"healthcheck", "run", "hc"})
+			hc.WaitWithDefaultTimeout()
+			Expect(hc).Should(ExitWithError(1, ""))
 
-		hc = podmanTest.Podman([]string{"healthcheck", "run", "hc"})
-		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+			inspect := podmanTest.InspectContainer("hc")
+			Expect(inspect[0].State.Health).To(HaveField("Status", "starting"))
 
-		inspect = podmanTest.InspectContainer("hc")
-		Expect(inspect[0].State.Health).To(HaveField("Status", define.HealthCheckUnhealthy))
+			hc = podmanTest.Podman([]string{"healthcheck", "run", "hc"})
+			hc.WaitWithDefaultTimeout()
+			Expect(hc).Should(ExitWithError(1, ""))
 
-		foo := podmanTest.Podman([]string{"exec", "hc", "touch", "/foo"})
-		foo.WaitWithDefaultTimeout()
-		Expect(foo).Should(ExitCleanly())
+			inspect = podmanTest.InspectContainer("hc")
+			Expect(inspect[0].State.Health).To(HaveField("Status", define.HealthCheckUnhealthy))
 
-		hc = podmanTest.Podman([]string{"healthcheck", "run", "hc"})
-		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(ExitCleanly())
+			foo := podmanTest.Podman([]string{"exec", "hc", "touch", "/foo"})
+			foo.WaitWithDefaultTimeout()
+			Expect(foo).Should(ExitCleanly())
 
-		inspect = podmanTest.InspectContainer("hc")
-		Expect(inspect[0].State.Health).To(HaveField("Status", define.HealthCheckHealthy))
+			hc = podmanTest.Podman([]string{"healthcheck", "run", "hc"})
+			hc.WaitWithDefaultTimeout()
+			Expect(hc).Should(ExitCleanly())
 
-		// Test that events generated have correct status (#19237)
-		events := podmanTest.Podman([]string{"events", "--stream=false", "--filter", "event=health_status", "--since", "1m"})
-		events.WaitWithDefaultTimeout()
-		Expect(events).Should(ExitCleanly())
-		eventsOut := events.OutputToStringArray()
-		Expect(eventsOut).To(HaveLen(3))
-		Expect(eventsOut[0]).To(ContainSubstring("health_status=starting"))
-		Expect(eventsOut[1]).To(ContainSubstring("health_status=unhealthy"))
-		Expect(eventsOut[2]).To(ContainSubstring("health_status=healthy"))
+			inspect = podmanTest.InspectContainer("hc")
+			Expect(inspect[0].State.Health).To(HaveField("Status", define.HealthCheckHealthy))
 
-		// Test podman ps --filter health is working (#11687)
-		ps := podmanTest.Podman([]string{"ps", "--filter", "health=healthy"})
-		ps.WaitWithDefaultTimeout()
-		Expect(ps).Should(ExitCleanly())
-		Expect(ps.OutputToStringArray()).To(HaveLen(2))
-		Expect(ps.OutputToString()).To(ContainSubstring("hc"))
-	})
+			// Test that events generated have correct status (#19237)
+			events := podmanTest.Podman([]string{"events", "--stream=false", "--filter", "event=health_status", "--since", "1m"})
+			events.WaitWithDefaultTimeout()
+			Expect(events).Should(ExitCleanly())
+			if hcEvent {
+				eventsOut := events.OutputToStringArray()
+				Expect(eventsOut).To(HaveLen(3))
+				Expect(eventsOut[0]).To(ContainSubstring("health_status=starting"))
+				Expect(eventsOut[1]).To(ContainSubstring("health_status=unhealthy"))
+				Expect(eventsOut[2]).To(ContainSubstring("health_status=healthy"))
+			} else {
+				Expect(events.OutputToString()).To(BeEmpty())
+			}
+
+			// Test podman ps --filter health is working (#11687)
+			ps := podmanTest.Podman([]string{"ps", "--filter", "health=healthy"})
+			ps.WaitWithDefaultTimeout()
+			Expect(ps).Should(ExitCleanly())
+			Expect(ps.OutputToStringArray()).To(HaveLen(2))
+			Expect(ps.OutputToString()).To(ContainSubstring("hc"))
+		})
+	}
 
 	It("hc logs do not include exec events", func() {
 		session := podmanTest.Podman([]string{"run", "-dt", "--name", "hc", "--health-cmd", "true", "--health-interval", "5s", "alpine", "sleep", "60"})
@@ -343,7 +365,7 @@ HEALTHCHECK CMD ls -l / 2>&1`, ALPINE)
 
 		hc := podmanTest.Podman([]string{"healthcheck", "run", ctrName})
 		hc.WaitWithDefaultTimeout()
-		Expect(hc).Should(Exit(1))
+		Expect(hc).Should(ExitWithError(1, ""))
 
 		exec := podmanTest.Podman([]string{"exec", ctrName, "sh", "-c", "touch /test && echo startup > /test"})
 		exec.WaitWithDefaultTimeout()

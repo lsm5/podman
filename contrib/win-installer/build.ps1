@@ -99,7 +99,7 @@ if ($args.Count -lt 1 -or $args[0].Length -lt 1) {
 }
 
 # Pre-set to standard locations in-case build env does not refresh paths
-$Env:Path="$Env:Path;C:\Program Files (x86)\WiX Toolset v3.11\bin;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin"
+$Env:Path="$Env:Path;C:\Program Files (x86)\WiX Toolset v3.14\bin;C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;;C:\Program Files\Go\bin"
 
 CheckRequirements
 
@@ -139,10 +139,18 @@ SignItem @("artifacts/win-sshproxy.exe",
 $gvExists = Test-Path "artifacts/gvproxy.exe"
 if ($gvExists) {
     SignItem @("artifacts/gvproxy.exe")
+    Remove-Item Env:\UseGVProxy -ErrorAction SilentlyContinue
 } else {
     $env:UseGVProxy = "Skip"
 }
 
+# Retaining for possible future additions
+# $pExists = Test-Path "artifacts/policy.json"
+# if ($pExists) {
+#     Remove-Item Env:\IncludePolicyJSON -ErrorAction SilentlyContinue
+# } else {
+#     $env:IncludePolicyJSON = "Skip"
+# }
 .\build-msi.bat $ENV:INSTVER; ExitOnError
 SignItem @("podman.msi")
 

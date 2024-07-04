@@ -1,13 +1,7 @@
 ---
 run:
   concurrency: 6
-  deadline: 5m
-  skip-dirs-use-default: true
-  skip-dirs:
-    - contrib
-    - dependencies
-  skip-files:
-    - swagger.go
+  timeout: 5m
   modules-download-mode: readonly
 linters:
   enable-all: true
@@ -22,12 +16,10 @@ linters:
     - nakedret
     - gosmopolitan # usage of time.Local in pkg/k8s.io
     - tagliatelle # too many JSON keys cannot be changed due to compat
-    - nosnakecase # too many false positives due to the `unix` package
     - dupword # too many false positives (e.g., in tests)
     - gocognit
     - testpackage
-    - goerr113
-    - exhaustivestruct
+    - err113
     - errorlint
     - wrapcheck
     - paralleltest
@@ -40,7 +32,6 @@ linters:
     - nestif
     - predeclared
     - thelper
-    - ifshort
     - forbidigo
     - exhaustive
     - gofumpt
@@ -54,12 +45,13 @@ linters:
     - gocyclo
     - lll
     - gosec
-    - maligned
     - musttag # way to many warnings to fix for now, also some false positives
+    - mnd # way to many false positives
     - gomoddirectives
     - containedctx
     - contextcheck
     - cyclop
+    - canonicalheader # our current header values are fixed and should not be changed
     - errname
     - forcetypeassert
     - ireturn
@@ -69,18 +61,11 @@ linters:
     - nonamedreturns
     - exhaustruct
     # deprecated linters
-    - golint # replaced by revive
-    - scopelint # replaced by exportloopref
-    - interfacer
-    - deadcode    # deprecated since v1.49.0, replaced by unused
-    - structcheck # deprecated since v1.49.0, replaced by unused
-    - varcheck    # deprecated since v1.49.0, replaced by unused
+    - execinquery
 linters-settings:
   errcheck:
     check-blank: false
-    ignore: fmt:.*
   nolintlint:
-    allow-leading-space: false
     allow-unused: true
     require-specific: true
   revive:
@@ -97,3 +82,9 @@ issues:
   # Set to 0 to disable.
   # Default: 3
   max-same-issues: 0
+  exclude-dirs-use-default: true
+  exclude-dirs:
+    - contrib
+    - dependencies
+  exclude-files:
+    - swagger.go

@@ -10,7 +10,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/containers/common/pkg/strongunits"
 	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/storage/pkg/fileutils"
 )
 
 // defaultQMPTimeout is the timeout duration for the
@@ -32,8 +34,11 @@ func NewQemuBuilder(binary string, options []string) QemuCmd {
 }
 
 // SetMemory adds the specified amount of memory for the machine
-func (q *QemuCmd) SetMemory(m uint64) {
-	*q = append(*q, "-m", strconv.FormatUint(m, 10))
+func (q *QemuCmd) SetMemory(m strongunits.MiB) {
+	serializedMem := strconv.FormatUint(uint64(m), 10)
+	// In order to use virtiofsd, we must enable shared memory
+	*q = append(*q, "-object", fmt.Sprintf("memory-backend-memfd,id=mem,size=%sM,share=on", serializedMem))
+	*q = append(*q, "-m", serializedMem)
 }
 
 // SetCPUs adds the number of CPUs the machine will have
@@ -52,10 +57,16 @@ func (q *QemuCmd) SetQmpMonitor(monitor Monitor) {
 }
 
 // SetNetwork adds a network device to the machine
-func (q *QemuCmd) SetNetwork() {
+func (q *QemuCmd) SetNetwork(vlanSocket *define.VMFile) error {
 	// Right now the mac address is hardcoded so that the host networking gives it a specific IP address.  This is
 	// why we can only run one vm at a time right now
-	*q = append(*q, "-netdev", "socket,id=vlan,fd=3", "-device", "virtio-net-pci,netdev=vlan,mac=5a:94:ef:e4:0c:ee")
+	*q = append(*q, "-netdev", socketVlanNetdev(vlanSocket.GetPath()))
+	*q = append(*q, "-device", "virtio-net-pci,netdev=vlan,mac=5a:94:ef:e4:0c:ee")
+	return nil
+}
+
+func socketVlanNetdev(path string) string {
+	return fmt.Sprintf("stream,id=vlan,server=off,addr.type=unix,addr.path=%s", path)
 }
 
 // SetNetwork adds a network device to the machine
@@ -88,15 +99,6 @@ func (q *QemuCmd) SetSerialPort(readySocket, vmPidFile define.VMFile, name strin
 		"-pidfile", vmPidFile.GetPath())
 }
 
-// SetVirtfsMount adds a virtfs mount to the machine
-func (q *QemuCmd) SetVirtfsMount(source, tag, securityModel string, readonly bool) {
-	virtfsOptions := fmt.Sprintf("local,path=%s,mount_tag=%s,security_model=%s", source, tag, securityModel)
-	if readonly {
-		virtfsOptions += ",readonly"
-	}
-	*q = append(*q, "-virtfs", virtfsOptions)
-}
-
 // SetBootableImage specifies the image the machine will use to boot
 func (q *QemuCmd) SetBootableImage(image string) {
 	*q = append(*q, "-drive", "if=virtio,file="+image)
@@ -105,11 +107,6 @@ func (q *QemuCmd) SetBootableImage(image string) {
 // SetDisplay specifies whether the machine will have a display
 func (q *QemuCmd) SetDisplay(display string) {
 	*q = append(*q, "-display", display)
-}
-
-// SetPropagatedHostEnvs adds options that propagate SSL and proxy settings
-func (q *QemuCmd) SetPropagatedHostEnvs() {
-	*q = PropagateHostEnv(*q)
 }
 
 func (q *QemuCmd) Build() []string {
@@ -127,7 +124,7 @@ type Monitor struct {
 
 // NewQMPMonitor creates the monitor subsection of our vm
 func NewQMPMonitor(name string, machineRuntimeDir *define.VMFile) (Monitor, error) {
-	if _, err := os.Stat(machineRuntimeDir.GetPath()); errors.Is(err, fs.ErrNotExist) {
+	if err := fileutils.Exists(machineRuntimeDir.GetPath()); errors.Is(err, fs.ErrNotExist) {
 		if err := os.MkdirAll(machineRuntimeDir.GetPath(), 0755); err != nil {
 			return Monitor{}, err
 		}

@@ -64,9 +64,6 @@ Examples:
 export PODMAN=${PODMAN:-$(pwd)/bin/podman}
 export QUADLET=${QUADLET:-$(pwd)/bin/quadlet}
 
-# Because 'make' doesn't do this by default
-chcon -t container_runtime_exec_t $PODMAN
-
 # Directory in which
 TESTS=test/system
 
@@ -127,6 +124,9 @@ fi
 
 # Used in 120-load test to identify rootless destination for podman image scp
 export PODMAN_ROOTLESS_USER=$(id -un)
+
+# Make sure to always check for leaks when running locally
+export PODMAN_BATS_LEAK_CHECK=1
 
 # Root
 if [[ "$TEST_ROOT" ]]; then

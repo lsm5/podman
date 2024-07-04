@@ -19,6 +19,7 @@ const registriesConf = `unqualified-search-registries=["docker.io"]
 
 const appendPort = `grep -q Port\ %d /etc/ssh/sshd_config || echo Port %d >> /etc/ssh/sshd_config`
 
+//nolint:unused
 const changePort = `sed -E -i 's/^Port[[:space:]]+[0-9]+/Port %d/' /etc/ssh/sshd_config`
 
 const configServices = `ln -fs /usr/lib/systemd/system/sshd.service /etc/systemd/system/multi-user.target.wants/sshd.service
@@ -174,43 +175,6 @@ SocketMode=0660
 SocketGroup=wheel
 `
 
-const proxyConfigSetup = `#!/bin/bash
-
-SYSTEMD_CONF=/etc/systemd/system.conf.d/default-env.conf
-ENVD_CONF=/etc/environment.d/default-env.conf
-PROFILE_CONF=/etc/profile.d/default-env.sh
-
-IFS="|"
-read proxies
-
-mkdir -p /etc/profile.d /etc/environment.d /etc/systemd/system.conf.d/
-rm -f $SYSTEMD_CONF
-for proxy in $proxies; do
-	output+="$proxy "
-done
-echo "[Manager]" >> $SYSTEMD_CONF
-echo -ne "DefaultEnvironment=" >> $SYSTEMD_CONF
-
-echo $output >> $SYSTEMD_CONF
-rm -f $ENVD_CONF
-for proxy in $proxies; do
-	echo "$proxy" >> $ENVD_CONF
-done
-rm -f $PROFILE_CONF
-for proxy in $proxies; do
-	echo "export $proxy" >> $PROFILE_CONF
-done
-`
-
-const proxyConfigAttempt = `if [ -f /usr/local/bin/proxyinit ]; \
-then /usr/local/bin/proxyinit; \
-else exit 42; \
-fi`
-
-const clearProxySettings = `rm -f /etc/systemd/system.conf.d/default-env.conf \
-	   /etc/environment.d/default-env.conf \
-	   /etc/profile.d/default-env.sh`
-
 const wslInstallError = `Could not %s. See previous output for any potential failure details.
 If you can not resolve the issue, and rerunning fails, try the "wsl --install" process
 outlined in the following article:
@@ -240,7 +204,7 @@ http://docs.microsoft.com/en-us/windows/wsl/install\
 
 const (
 	gvProxy      = "gvproxy.exe"
-	winSShProxy  = "win-sshproxy.exe"
+	winSSHProxy  = "win-sshproxy.exe"
 	pipePrefix   = "npipe:////./pipe/"
 	globalPipe   = "docker_engine"
 	userModeDist = "podman-net-usermode"

@@ -37,10 +37,7 @@ echo $rand        |   0 | $rand
         # a way to do so.
         eval set "$cmd"
 
-        # FIXME: The </dev/null is a hack, necessary because as of 2019-09
-        #        podman-remote has a bug in which it silently slurps up stdin,
-        #        including the output of parse_table (i.e. tests to be run).
-        run_podman $expected_rc run $IMAGE "$@"
+        run_podman $expected_rc run --rm $IMAGE "$@"
         is "$output" "$expected_output" "podman run $cmd - output"
 
         tests_run=$(expr $tests_run + 1)
@@ -127,10 +124,7 @@ echo $rand        |   0 | $rand
 @test "podman run --name" {
     randomname=$(random_string 30)
 
-    # Assume that 4 seconds gives us enough time for 3 quick tests (or at
-    # least for the 'ps'; the 'container exists' should pass even in the
-    # unlikely case that the container exits before we get to them)
-    run_podman run -d --name $randomname $IMAGE sleep 4
+    run_podman run -d --name $randomname $IMAGE sleep inf
     cid=$output
 
     run_podman ps --format '{{.Names}}--{{.ID}}'
@@ -140,7 +134,7 @@ echo $rand        |   0 | $rand
     run_podman container exists $cid
 
     # Done with live-container tests; now let's test after container finishes
-    run_podman wait $cid
+    run_podman stop -t0 $cid
 
     # Container still exists even after stopping:
     run_podman container exists $randomname
@@ -311,12 +305,10 @@ echo $rand        |   0 | $rand
         for user in "--user=0" "--user=100"; do
             for keepid in "" ${keep}; do
                 opts="$priv $user $keepid"
-
-                for dir in /etc /usr;do
-                    run_podman run --rm $opts $IMAGE stat -c '%u:%g:%n' $dir
-                    remove_same_dev_warning      # grumble
-                    is "$output" "0:0:$dir" "run $opts ($dir)"
-                done
+                run_podman run --rm $opts $IMAGE stat -c '%u:%g:%n' $dir /etc /usr
+                remove_same_dev_warning      # grumble
+                is "${lines[0]}" "0:0:/etc" "run $opts /etc"
+                is "${lines[1]}" "0:0:/usr" "run $opts /usr"
             done
         done
     done
@@ -506,6 +498,8 @@ json-file | f
 }
 
 @test "podman run --tz with zoneinfo" {
+    _prefetch $SYSTEMD_IMAGE
+
     # First make sure that zoneinfo is actually in the image otherwise the test is pointless
     run_podman run --rm $SYSTEMD_IMAGE ls /usr/share/zoneinfo
 
@@ -776,7 +770,7 @@ json-file | f
 @test "podman run --timeout - basic test" {
     cid=timeouttest
     t0=$SECONDS
-    run_podman 255 run --name $cid --timeout 10 $IMAGE sleep 60
+    run_podman 255 run --name $cid --timeout 2 $IMAGE sleep 60
     t1=$SECONDS
     # Confirm that container is stopped. Podman-remote unfortunately
     # cannot tell the difference between "stopped" and "exited", and
@@ -788,8 +782,8 @@ json-file | f
     # This operation should take
     # exactly 10 seconds. Give it some leeway.
     delta_t=$(( $t1 - $t0 ))
-    assert "$delta_t" -gt  8 "podman stop: ran too quickly!"
-    assert "$delta_t" -le 14 "podman stop: took too long"
+    assert "$delta_t" -gt 1 "podman stop: ran too quickly!"
+    assert "$delta_t" -le 6 "podman stop: took too long"
 
     run_podman rm $cid
 }
@@ -1016,6 +1010,7 @@ EOF
     run_podman rm $output
 }
 
+# bats file_tags=distro-integration
 @test "podman run --device-read-bps" {
     skip_if_rootless "cannot use this flag in rootless mode"
     # this test is a triple check on blkio flags since they seem to sneak by the tests
@@ -1079,7 +1074,7 @@ $IMAGE--c_ok" \
     run_podman stop -t 0 $cid
 
     # Actual test for 15895: with --systemd, no ttyN devices are passed through
-    run_podman run -d --privileged --systemd=always $IMAGE top
+    run_podman run -d --privileged --stop-signal=TERM --systemd=always $IMAGE top
     cid="$output"
 
     run_podman exec $cid sh -c "find /dev -regex '/dev/tty[0-9].*' | wc -w"
@@ -1087,12 +1082,7 @@ $IMAGE--c_ok" \
            "ls /dev/tty[0-9] with --systemd=always: should have no ttyN devices"
 
     # Make sure run_podman stop supports -1 option
-    # FIXME: do we really really mean to say FFFFFFFFFFFFFFFF here???
-    run_podman 0+w stop -t -1 $cid
-    if ! is_remote; then
-        require_warning "StopSignal \(37\) failed to stop container .* in 18446744073709551615 seconds, resorting to SIGKILL" \
-                        "stop -t -1 (negative 1) issues warning"
-    fi
+    run_podman stop -t -1 $cid
     run_podman rm -t -1 -f $cid
 }
 
@@ -1146,16 +1136,19 @@ EOF
 
     CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman 1 run --rm $IMAGE touch /testro
     CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm --read-only=false $IMAGE touch /testrw
-    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm $IMAGE touch /tmp/testrw
-    for dir in /tmp /var/tmp /dev /dev/shm /run; do
-        CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm $IMAGE touch $dir/testro
-        CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm --read-only=false $IMAGE touch $dir/testro
-        CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm --read-only=false --read-only-tmpfs=true $IMAGE touch $dir/testro
-        CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm --read-only-tmpfs=true $IMAGE touch $dir/testro
 
-        CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman 1 run --rm --read-only-tmpfs=false $IMAGE touch $dir/testro
-        assert "$output" =~ "touch: $dir/testro: Read-only file system"
-    done
+    files="/tmp/a /var/tmp/b /dev/c /dev/shm/d /run/e"
+    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm $IMAGE touch $files
+    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm --read-only=false $IMAGE touch $files
+    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm --read-only=false --read-only-tmpfs=true $IMAGE touch $files
+    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman run --rm --read-only-tmpfs=true $IMAGE touch $files
+
+    CONTAINERS_CONF_OVERRIDE="$containersconf" run_podman 1 run --rm --read-only-tmpfs=false $IMAGE touch $files
+    assert "$output" == "touch: /tmp/a: Read-only file system
+touch: /var/tmp/b: Read-only file system
+touch: /dev/c: Read-only file system
+touch: /dev/shm/d: Read-only file system
+touch: /run/e: Read-only file system"
 }
 
 @test "podman run ulimit from containers.conf" {
@@ -1257,8 +1250,15 @@ EOF
 
     touch $romount/testfile
     chown 2000:2000 $romount/testfile
-    run_podman run --uidmap=0:1000:2 --rm --rootfs "$romount:idmap=uids=@2000-1-1;gids=@2000-1-1" stat -c %u:%g /testfile
+    run_podman run --uidmap=0:1000:200 --rm --rootfs "$romount:idmap=uids=@2000-1-1;gids=@2000-1-1" stat -c %u:%g /testfile
     is "$output" "1:1"
+
+    myvolume=my-volume-$(random_string)
+    run_podman volume create $myvolume
+    mkdir $romount/volume
+    run_podman run --rm --uidmap=0:1000:10000 -v volume:/volume:idmap --rootfs $romount stat -c %u:%g /volume
+    is "$output" "0:0"
+    run_podman volume rm $myvolume
 
     rm -rf $romount
 }
@@ -1311,9 +1311,9 @@ kube play            | argument         |
 logout               | $IMAGE           |
 manifest add         | $IMAGE argument  |
 manifest inspect     | $IMAGE           |
-manifest push        | $IMAGE argument  |
-pull                 | $IMAGE argument  |
-push                 | $IMAGE argument  |
+manifest push        | $IMAGE           |
+pull                 | $IMAGE           |
+push                 | $IMAGE           |
 run                  | $IMAGE false     |
 search               | $IMAGE           |
 "
@@ -1335,7 +1335,7 @@ search               | $IMAGE           |
         if [[ "$args" = "''" ]]; then args=;fi
 
         run_podman 125 $command --authfile=$bogus $args
-        assert "$output" = "Error: credential file is not accessible: stat $bogus: no such file or directory" \
+        assert "$output" = "Error: credential file is not accessible: faccessat $bogus: no such file or directory" \
            "$command --authfile=nonexistent-path"
 
         if [[ "$command" != "logout" ]]; then
@@ -1344,6 +1344,9 @@ search               | $IMAGE           |
               "$command REGISTRY_AUTH_FILE=nonexistent-path"
         fi
     done < <(parse_table "$tests")
+
+    # test cases above create two containers
+    run_podman rm -fa
 }
 
 @test "podman --syslog and environment passed to conmon" {
@@ -1393,6 +1396,8 @@ search               | $IMAGE           |
 
 # https://issues.redhat.com/browse/RHEL-14469
 @test "podman run - /run must not be world-writable in systemd containers" {
+    _prefetch $SYSTEMD_IMAGE
+
     run_podman run -d --rm $SYSTEMD_IMAGE /usr/sbin/init
     cid=$output
 
@@ -1457,6 +1462,48 @@ search               | $IMAGE           |
     # The '.*' in the error below is for dealing with podman-remote, which
     # includes "error preparing container <sha> for attach" in output.
     is "$output" "Error.*: $expect" "podman emits useful diagnostic when no entrypoint is set"
+}
+
+@test "podman run - stopping loop" {
+    skip_if_remote "this doesn't work with with the REST service"
+
+    run_podman run -d --name testctr --stop-timeout 240 $IMAGE sh -c 'echo READY; sleep 999'
+    cid="$output"
+    wait_for_ready testctr
+
+    run_podman inspect --format '{{ .State.ConmonPid }}' testctr
+    conmon_pid=$output
+
+    ${PODMAN} stop testctr &
+    stop_pid=$!
+
+    timeout=20
+    while :;do
+        sleep 0.5
+        run_podman container inspect --format '{{.State.Status}}' testctr
+        if [[ "$output" = "stopping" ]]; then
+            break
+        fi
+        timeout=$((timeout - 1))
+        if [[ $timeout == 0 ]]; then
+            run_podman ps -a
+            die "Timed out waiting for testctr to acknowledge signal"
+        fi
+    done
+
+    kill -9 ${stop_pid}
+    kill -9 ${conmon_pid}
+
+    # Unclear why `-t0` is required here, works locally without.
+    # But it shouldn't hurt and does make the test pass...
+    PODMAN_TIMEOUT=5 run_podman 125 stop -t0 testctr
+    is "$output" "Error: container .* conmon exited prematurely, exit code could not be retrieved: internal libpod error" "correct error on missing conmon"
+
+    # This should be safe because stop is guaranteed to call cleanup?
+    run_podman inspect --format "{{ .State.Status }}" testctr
+    is "$output" "exited" "container has successfully transitioned to exited state after stop"
+
+    run_podman rm -f -t0 testctr
 }
 
 # vim: filetype=sh

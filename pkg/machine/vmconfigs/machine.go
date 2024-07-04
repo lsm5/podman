@@ -10,11 +10,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containers/common/pkg/strongunits"
 	define2 "github.com/containers/podman/v5/libpod/define"
+	"github.com/containers/podman/v5/pkg/errorhandling"
 	"github.com/containers/podman/v5/pkg/machine/connection"
 	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/podman/v5/pkg/machine/env"
 	"github.com/containers/podman/v5/pkg/machine/lock"
-	"github.com/containers/podman/v5/utils"
+	"github.com/containers/podman/v5/pkg/machine/ports"
+	"github.com/containers/storage/pkg/fileutils"
+	"github.com/containers/storage/pkg/ioutils"
+	"github.com/containers/storage/pkg/lockfile"
 	"github.com/sirupsen/logrus"
 )
 
@@ -39,16 +45,11 @@ var (
 
 type RemoteConnectionType string
 
-// NewMachineConfig creates the initial machine configuration file from cli options
-func NewMachineConfig(opts define.InitOptions, dirs *define.MachineDirs, sshIdentityPath string, vmtype define.VMType) (*MachineConfig, error) {
+// NewMachineConfig creates the initial machine configuration file from cli options.
+func NewMachineConfig(opts define.InitOptions, dirs *define.MachineDirs, sshIdentityPath string, vmtype define.VMType, machineLock *lockfile.LockFile) (*MachineConfig, error) {
 	mc := new(MachineConfig)
 	mc.Name = opts.Name
 	mc.dirs = dirs
-
-	machineLock, err := lock.GetMachineLock(opts.Name, dirs.ConfigDir.GetPath())
-	if err != nil {
-		return nil, err
-	}
 	mc.lock = machineLock
 
 	// Assign Dirs
@@ -57,6 +58,11 @@ func NewMachineConfig(opts define.InitOptions, dirs *define.MachineDirs, sshIden
 		return nil, err
 	}
 	mc.configPath = cf
+	// Given that we are locked now and check again that the config file does not exists,
+	// if it does it means the VM was already created and we should error.
+	if err := fileutils.Exists(cf.Path); err == nil {
+		return nil, fmt.Errorf("%s: %w", opts.Name, define.ErrVMAlreadyExists)
+	}
 
 	if vmtype != define.QemuVirt && len(opts.USBs) > 0 {
 		return nil, fmt.Errorf("USB host passthrough not supported for %s machines", vmtype)
@@ -70,14 +76,13 @@ func NewMachineConfig(opts define.InitOptions, dirs *define.MachineDirs, sshIden
 	// System Resources
 	mrc := ResourceConfig{
 		CPUs:     opts.CPUS,
-		DiskSize: opts.DiskSize,
-		Memory:   opts.Memory,
+		DiskSize: strongunits.GiB(opts.DiskSize),
+		Memory:   strongunits.MiB(opts.Memory),
 		USBs:     usbs,
 	}
 	mc.Resources = mrc
 
-	// TODO WSL had a locking port mechanism, we should consider this.
-	sshPort, err := utils.GetRandomPort()
+	sshPort, err := ports.AllocateMachinePort()
 	if err != nil {
 		return nil, err
 	}
@@ -106,13 +111,6 @@ func (mc *MachineConfig) Unlock() {
 	mc.lock.Unlock()
 }
 
-// Write is a locking way to the machine configuration file
-func (mc *MachineConfig) Write() error {
-	mc.Lock()
-	defer mc.Unlock()
-	return mc.write()
-}
-
 // Refresh reloads the config file from disk
 func (mc *MachineConfig) Refresh() error {
 	content, err := os.ReadFile(mc.configPath.GetPath())
@@ -123,7 +121,7 @@ func (mc *MachineConfig) Refresh() error {
 }
 
 // write is a non-locking way to write the machine configuration file to disk
-func (mc *MachineConfig) write() error {
+func (mc *MachineConfig) Write() error {
 	if mc.configPath == nil {
 		return fmt.Errorf("no configuration file associated with vm %q", mc.Name)
 	}
@@ -132,7 +130,7 @@ func (mc *MachineConfig) write() error {
 		return err
 	}
 	logrus.Debugf("writing configuration file %q", mc.configPath.Path)
-	return os.WriteFile(mc.configPath.GetPath(), b, define.DefaultFilePerm)
+	return ioutils.AtomicWriteFile(mc.configPath.GetPath(), b, define.DefaultFilePerm)
 }
 
 func (mc *MachineConfig) SetRootful(rootful bool) error {
@@ -166,6 +164,16 @@ func (mc *MachineConfig) Remove(saveIgnition, saveImage bool) ([]string, func() 
 		return nil, nil, err
 	}
 
+	gvProxySocket, err := mc.GVProxySocket()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	apiSocket, err := mc.APISocket()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	logPath, err := mc.LogFile()
 	if err != nil {
 		return nil, nil, err
@@ -174,6 +182,8 @@ func (mc *MachineConfig) Remove(saveIgnition, saveImage bool) ([]string, func() 
 	rmFiles := []string{
 		mc.configPath.GetPath(),
 		readySocket.GetPath(),
+		gvProxySocket.GetPath(),
+		apiSocket.GetPath(),
 		logPath.GetPath(),
 	}
 	if !saveImage {
@@ -184,28 +194,43 @@ func (mc *MachineConfig) Remove(saveIgnition, saveImage bool) ([]string, func() 
 	}
 
 	mcRemove := func() error {
+		var errs []error
+		if err := connection.RemoveConnections(mc.Name, mc.Name+"-root"); err != nil {
+			errs = append(errs, err)
+		}
+
 		if !saveIgnition {
 			if err := ignitionFile.Delete(); err != nil {
-				logrus.Error(err)
+				errs = append(errs, err)
 			}
 		}
 		if !saveImage {
 			if err := mc.ImagePath.Delete(); err != nil {
-				logrus.Error(err)
+				errs = append(errs, err)
 			}
 		}
-		if err := mc.configPath.Delete(); err != nil {
-			logrus.Error(err)
-		}
 		if err := readySocket.Delete(); err != nil {
-			logrus.Error()
+			errs = append(errs, err)
+		}
+		if err := gvProxySocket.Delete(); err != nil {
+			errs = append(errs, err)
+		}
+		if err := apiSocket.Delete(); err != nil {
+			errs = append(errs, err)
 		}
 		if err := logPath.Delete(); err != nil {
-			logrus.Error(err)
+			errs = append(errs, err)
 		}
-		// TODO This should be bumped up into delete and called out in the text given then
-		// are not technically files per'se
-		return connection.RemoveConnections(mc.Name, mc.Name+"-root")
+
+		if err := mc.configPath.Delete(); err != nil {
+			errs = append(errs, err)
+		}
+
+		if err := ports.ReleaseMachinePort(mc.SSH.Port); err != nil {
+			errs = append(errs, err)
+		}
+
+		return errorhandling.JoinErrors(errs)
 	}
 
 	return rmFiles, mcRemove, nil
@@ -263,6 +288,14 @@ func (mc *MachineConfig) GVProxySocket() (*define.VMFile, error) {
 	return gvProxySocket(mc.Name, machineRuntimeDir)
 }
 
+func (mc *MachineConfig) APISocket() (*define.VMFile, error) {
+	machineRuntimeDir, err := mc.RuntimeDir()
+	if err != nil {
+		return nil, err
+	}
+	return apiSocket(mc.Name, machineRuntimeDir)
+}
+
 func (mc *MachineConfig) LogFile() (*define.VMFile, error) {
 	rtDir, err := mc.RuntimeDir()
 	if err != nil {
@@ -295,6 +328,22 @@ func (mc *MachineConfig) IsFirstBoot() (bool, error) {
 		return false, err
 	}
 	return mc.LastUp == never, nil
+}
+
+func (mc *MachineConfig) ConnectionInfo(vmtype define.VMType) (*define.VMFile, *define.VMFile, error) {
+	var (
+		socket *define.VMFile
+		pipe   *define.VMFile
+	)
+
+	if vmtype == define.HyperVVirt || vmtype == define.WSLVirt {
+		pipeName := env.WithPodmanPrefix(mc.Name)
+		pipe = &define.VMFile{Path: `\\.\pipe\` + pipeName}
+		return nil, pipe, nil
+	}
+
+	socket, err := mc.APISocket()
+	return socket, nil, err
 }
 
 // LoadMachineByName returns a machine config based on the vm name and provider

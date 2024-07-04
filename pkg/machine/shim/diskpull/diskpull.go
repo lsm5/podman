@@ -15,12 +15,12 @@ func GetDisk(userInputPath string, dirs *define.MachineDirs, imagePath *define.V
 		mydisk ocipull.Disker
 	)
 
-	if userInputPath == "" {
-		mydisk, err = ocipull.NewOCIArtifactPull(context.Background(), dirs, name, vmType, imagePath)
+	if userInputPath == "" || strings.HasPrefix(userInputPath, "docker://") {
+		mydisk, err = ocipull.NewOCIArtifactPull(context.Background(), dirs, userInputPath, name, vmType, imagePath)
 	} else {
 		if strings.HasPrefix(userInputPath, "http") {
 			// TODO probably should use tempdir instead of datadir
-			mydisk, err = stdpull.NewDiskFromURL(userInputPath, imagePath, dirs.DataDir, nil)
+			mydisk, err = stdpull.NewDiskFromURL(userInputPath, imagePath, dirs.DataDir, nil, false)
 		} else {
 			mydisk, err = stdpull.NewStdDiskPull(userInputPath, imagePath)
 		}

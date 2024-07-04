@@ -13,6 +13,7 @@ import (
 	nettypes "github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/apparmor"
 	"github.com/containers/common/pkg/cgroupv2"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/homedir"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/containers/storage/types"
@@ -74,6 +75,8 @@ var (
 	ErrInvalidArg = errors.New("invalid argument")
 	// DefaultHooksDirs defines the default hooks directory.
 	DefaultHooksDirs = []string{"/usr/share/containers/oci/hooks.d"}
+	// DefaultCdiSpecDirs defines the default cdi spec directories.
+	DefaultCdiSpecDirs = []string{"/etc/cdi"}
 	// DefaultCapabilities is the default for the default_capabilities option in the containers.conf file.
 	DefaultCapabilities = []string{
 		"CAP_CHOWN",
@@ -204,8 +207,8 @@ func defaultConfig() (*Config, error) {
 		}
 		sigPath := filepath.Join(configHome, DefaultRootlessSignaturePolicyPath)
 		defaultEngineConfig.SignaturePolicyPath = sigPath
-		if _, err := os.Stat(sigPath); err != nil {
-			if _, err := os.Stat(DefaultSignaturePolicyPath); err == nil {
+		if err := fileutils.Exists(sigPath); err != nil {
+			if err := fileutils.Exists(DefaultSignaturePolicyPath); err == nil {
 				defaultEngineConfig.SignaturePolicyPath = DefaultSignaturePolicyPath
 			}
 		}
@@ -257,15 +260,16 @@ func defaultConfig() (*Config, error) {
 			DefaultNetwork:            "podman",
 			DefaultSubnet:             DefaultSubnet,
 			DefaultSubnetPools:        DefaultSubnetPools,
-			DefaultRootlessNetworkCmd: "slirp4netns",
+			DefaultRootlessNetworkCmd: "pasta",
 			DNSBindPort:               0,
 			CNIPluginDirs:             attributedstring.NewSlice(DefaultCNIPluginDirs),
 			NetavarkPluginDirs:        attributedstring.NewSlice(DefaultNetavarkPluginDirs),
 		},
-		Engine:  *defaultEngineConfig,
-		Secrets: defaultSecretConfig(),
-		Machine: defaultMachineConfig(),
-		Farms:   defaultFarmConfig(),
+		Engine:   *defaultEngineConfig,
+		Secrets:  defaultSecretConfig(),
+		Machine:  defaultMachineConfig(),
+		Farms:    defaultFarmConfig(),
+		Podmansh: defaultPodmanshConfig(),
 	}, nil
 }
 
@@ -286,10 +290,14 @@ func defaultMachineConfig() MachineConfig {
 	return MachineConfig{
 		CPUs:     uint64(cpus),
 		DiskSize: 100,
-		Image:    getDefaultMachineImage(),
-		Memory:   2048,
-		User:     getDefaultMachineUser(),
-		Volumes:  attributedstring.NewSlice(getDefaultMachineVolumes()),
+		// TODO: Set machine image default here
+		// Currently the default is set in Podman as we need time to stabilize
+		// VM images and locations between different providers.
+		Image:   "",
+		Memory:  2048,
+		User:    getDefaultMachineUser(),
+		Volumes: attributedstring.NewSlice(getDefaultMachineVolumes()),
+		Rosetta: true,
 	}
 }
 
@@ -297,6 +305,18 @@ func defaultMachineConfig() MachineConfig {
 func defaultFarmConfig() FarmConfig {
 	return FarmConfig{
 		List: map[string][]string{},
+	}
+}
+
+// defaultPodmanshConfig returns the default podmansh configuration.
+func defaultPodmanshConfig() PodmanshConfig {
+	return PodmanshConfig{
+		Shell:     "/bin/sh",
+		Container: "podmansh",
+
+		// A value of 0 means "not set", needed to distinguish if engine.podmansh_timeout or podmansh.timeout should be used
+		// This is needed to keep backwards compatibility to engine.PodmanshTimeout.
+		Timeout: uint(0),
 	}
 }
 
@@ -337,12 +357,14 @@ func defaultEngineConfig() (*EngineConfig, error) {
 	c.VolumePluginTimeout = DefaultVolumePluginTimeout
 	c.CompressionFormat = "gzip"
 
+	c.HealthcheckEvents = true
 	c.HelperBinariesDir.Set(defaultHelperBinariesDir)
 	if additionalHelperBinariesDir != "" {
 		// Prioritize additionalHelperBinariesDir over defaults.
 		c.HelperBinariesDir.Set(append([]string{additionalHelperBinariesDir}, c.HelperBinariesDir.Get()...))
 	}
 	c.HooksDir.Set(DefaultHooksDirs)
+	c.CdiSpecDirs.Set(DefaultCdiSpecDirs)
 	c.ImageDefaultTransport = _defaultTransport
 	c.ImageVolumeMode = _defaultImageVolumeMode
 
@@ -351,9 +373,10 @@ func defaultEngineConfig() (*EngineConfig, error) {
 	c.CgroupManager = defaultCgroupManager()
 	c.ServiceTimeout = uint(5)
 	c.StopTimeout = uint(10)
-	c.PodmanshTimeout = uint(30)
+	c.PodmanshTimeout = uint(30) // deprecated: use podmansh.timeout instead, kept for backwards-compatibility
 	c.ExitCommandDelay = uint(5 * 60)
 	c.Remote = isRemote()
+	c.Retry = 3
 	c.OCIRuntimes = map[string][]string{
 		"crun": {
 			"/usr/bin/crun",
@@ -479,7 +502,6 @@ func defaultEngineConfig() (*EngineConfig, error) {
 	// TODO - ideally we should expose a `type LockType string` along with
 	// constants.
 	c.LockType = getDefaultLockType()
-	c.MachineEnabled = false
 	c.ChownCopiedFiles = true
 
 	c.PodExitPolicy = defaultPodExitPolicy
@@ -527,13 +549,13 @@ func (c EngineConfig) EventsLogMaxSize() uint64 {
 func (c *Config) SecurityOptions() []string {
 	securityOpts := []string{}
 	if c.Containers.SeccompProfile != "" && c.Containers.SeccompProfile != SeccompDefaultPath {
-		securityOpts = append(securityOpts, fmt.Sprintf("seccomp=%s", c.Containers.SeccompProfile))
+		securityOpts = append(securityOpts, "seccomp="+c.Containers.SeccompProfile)
 	}
 	if apparmor.IsEnabled() && c.Containers.ApparmorProfile != "" {
-		securityOpts = append(securityOpts, fmt.Sprintf("apparmor=%s", c.Containers.ApparmorProfile))
+		securityOpts = append(securityOpts, "apparmor="+c.Containers.ApparmorProfile)
 	}
 	if selinux.GetEnabled() && !c.Containers.EnableLabeling {
-		securityOpts = append(securityOpts, fmt.Sprintf("label=%s", selinux.DisableSecOpt()[0]))
+		securityOpts = append(securityOpts, "label="+selinux.DisableSecOpt()[0])
 	}
 	return securityOpts
 }
@@ -648,11 +670,6 @@ func (c *Config) LogDriver() string {
 	return c.Containers.LogDriver
 }
 
-// MachineEnabled returns if podman is running inside a VM or not.
-func (c *Config) MachineEnabled() bool {
-	return c.Engine.MachineEnabled
-}
-
 // MachineVolumes returns volumes to mount into the VM.
 func (c *Config) MachineVolumes() ([]string, error) {
 	return machineVolumes(c.Machine.Volumes.Get())
@@ -680,12 +697,6 @@ func getDefaultSSHConfig() string {
 	}
 	dirname := homedir.Get()
 	return filepath.Join(dirname, ".ssh", "config")
-}
-
-// getDefaultImage returns the default machine image stream
-// On Windows this refers to the Fedora major release number
-func getDefaultMachineImage() string {
-	return "testing"
 }
 
 // getDefaultMachineUser returns the user to use for rootless podman

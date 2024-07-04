@@ -266,7 +266,7 @@ EOF
     local infra_cid="$output"
     # confirm that entrypoint is what we set
     run_podman container inspect --format '{{.Config.Entrypoint}}' $infra_cid
-    is "$output" "$infra_command" "infra-command took effect"
+    is "$output" "[${infra_command}]" "infra-command took effect"
     # confirm that infra container name is set
     run_podman container inspect --format '{{.Name}}' $infra_cid
     is "$output" "$infra_name" "infra-name took effect"
@@ -508,6 +508,7 @@ spec:
     is "$output" "stop" "custom exit policy"
     _ensure_pod_state $name-pod Exited
     run_podman pod rm $name-pod
+    run_podman network rm podman-default-kube-network
 }
 
 @test "pod resource limits" {
@@ -579,6 +580,12 @@ io.max          | $lomajmin rbps=1048576 wbps=1048576 riops=max wiops=max
     is "$output" "Error: .*bogus.*: no such pod" "Should print error"
     run_podman pod rm -t -1 --force bogus
     is "$output" "" "Should print no output"
+
+    run_podman pod create --name testpod
+    run_podman pod rm --force bogus testpod
+    assert "$output" =~ "[0-9a-f]{64}" "rm pod"
+    run_podman pod ps -q
+    assert "$output" = "" "no pods listed"
 }
 
 @test "podman pod create on failure" {

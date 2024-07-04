@@ -114,23 +114,22 @@ func pullFlags(cmd *cobra.Command) {
 	_ = cmd.RegisterFlagCompletionFunc(decryptionKeysFlagName, completion.AutocompleteDefault)
 
 	retryFlagName := "retry"
-	flags.Uint(retryFlagName, cli.MaxPullPushRetries, "number of times to retry in case of failure when performing pull")
+	flags.Uint(retryFlagName, registry.RetryDefault(), "number of times to retry in case of failure when performing pull")
 	_ = cmd.RegisterFlagCompletionFunc(retryFlagName, completion.AutocompleteNone)
 	retryDelayFlagName := "retry-delay"
-	flags.String(retryDelayFlagName, cli.PullPushRetryDelay.String(), "delay between retries in case of pull failures")
+	flags.String(retryDelayFlagName, registry.RetryDelayDefault(), "delay between retries in case of pull failures")
 	_ = cmd.RegisterFlagCompletionFunc(retryDelayFlagName, completion.AutocompleteNone)
 
 	if registry.IsRemote() {
 		_ = flags.MarkHidden(decryptionKeysFlagName)
-	}
-	if !registry.IsRemote() {
+	} else {
 		certDirFlagName := "cert-dir"
 		flags.StringVar(&pullOptions.CertDir, certDirFlagName, "", "`Pathname` of a directory containing TLS certificates and keys")
 		_ = cmd.RegisterFlagCompletionFunc(certDirFlagName, completion.AutocompleteDefault)
-	}
-	if !registry.IsRemote() {
-		flags.StringVar(&pullOptions.SignaturePolicy, "signature-policy", "", "`Pathname` of signature policy file (not usually used)")
-		_ = flags.MarkHidden("signature-policy")
+
+		signaturePolicyFlagName := "signature-policy"
+		flags.StringVar(&pullOptions.SignaturePolicy, signaturePolicyFlagName, "", "`Pathname` of signature policy file (not usually used)")
+		_ = flags.MarkHidden(signaturePolicyFlagName)
 	}
 }
 

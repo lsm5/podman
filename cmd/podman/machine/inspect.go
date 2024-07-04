@@ -10,6 +10,7 @@ import (
 	"github.com/containers/podman/v5/cmd/podman/registry"
 	"github.com/containers/podman/v5/cmd/podman/utils"
 	"github.com/containers/podman/v5/pkg/machine"
+	"github.com/containers/podman/v5/pkg/machine/env"
 	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
 	"github.com/spf13/cobra"
 )
@@ -47,7 +48,7 @@ func inspect(cmd *cobra.Command, args []string) error {
 	var (
 		errs utils.OutputErrors
 	)
-	dirs, err := machine.GetMachineDirs(provider.VMType())
+	dirs, err := env.GetMachineDirs(provider.VMType())
 	if err != nil {
 		return err
 	}
@@ -67,31 +68,32 @@ func inspect(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		ignFile, err := mc.IgnitionFile()
+
+		podmanSocket, podmanPipe, err := mc.ConnectionInfo(provider.VMType())
+		if err != nil {
+			return err
+		}
+
+		rosetta, err := provider.GetRosetta(mc)
 		if err != nil {
 			return err
 		}
 
 		ii := machine.InspectInfo{
-			// TODO I dont think this is useful
-			ConfigPath: *dirs.ConfigDir,
-			// TODO Fill this out
-			ConnectionInfo: machine.ConnectionConfig{},
-			Created:        mc.Created,
-			// TODO This is no longer applicable; we dont care about the provenance
-			// of the image
-			Image: machine.ImageConfig{
-				IgnitionFile: *ignFile,
-				ImagePath:    *mc.ImagePath,
+			ConfigDir: *dirs.ConfigDir,
+			ConnectionInfo: machine.ConnectionConfig{
+				PodmanSocket: podmanSocket,
+				PodmanPipe:   podmanPipe,
 			},
+			Created:            mc.Created,
 			LastUp:             mc.LastUp,
 			Name:               mc.Name,
 			Resources:          mc.Resources,
 			SSHConfig:          mc.SSH,
 			State:              state,
 			UserModeNetworking: provider.UserModeNetworkEnabled(mc),
-			// TODO I think this should be the HostUser
-			Rootful: mc.HostUser.Rootful,
+			Rootful:            mc.HostUser.Rootful,
+			Rosetta:            rosetta,
 		}
 
 		vms = append(vms, ii)

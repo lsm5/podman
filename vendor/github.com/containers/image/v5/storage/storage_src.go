@@ -29,16 +29,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// getBlobMutexProtected is a struct to hold the state of the getBlobMutex mutex.
-type getBlobMutexProtected struct {
-	// digestToLayerID is a lookup map from the layer digest (either the uncompressed digest or the TOC digest) to the
-	// layer ID in the store.
-	digestToLayerID map[digest.Digest]string
-
-	// layerPosition stores where we are in reading a blob's layers
-	layerPosition map[digest.Digest]int
-}
-
 type storageImageSource struct {
 	impl.Compat
 	impl.PropertyMethodsInitialize
@@ -47,13 +37,25 @@ type storageImageSource struct {
 	imageRef              storageReference
 	image                 *storage.Image
 	systemContext         *types.SystemContext // SystemContext used in GetBlob() to create temporary files
-	cachedManifest        []byte               // A cached copy of the manifest, if already known, or nil
-	getBlobMutex          sync.Mutex           // Mutex to sync state for parallel GetBlob executions (it guards layerPosition and digestToLayerID)
+	metadata              storageImageMetadata
+	cachedManifest        []byte     // A cached copy of the manifest, if already known, or nil
+	getBlobMutex          sync.Mutex // Mutex to sync state for parallel GetBlob executions
 	getBlobMutexProtected getBlobMutexProtected
-	SignatureSizes        []int                   `json:"signature-sizes,omitempty"`  // List of sizes of each signature slice
-	SignaturesSizes       map[digest.Digest][]int `json:"signatures-sizes,omitempty"` // List of sizes of each signature slice
 }
 
+// getBlobMutexProtected contains storageImageSource data protected by getBlobMutex.
+type getBlobMutexProtected struct {
+	// digestToLayerID is a lookup map from a possibly-untrusted uncompressed layer digest (as returned by LayerInfosForCopy) to the
+	// layer ID in the store.
+	digestToLayerID map[digest.Digest]string
+
+	// layerPosition stores where we are in reading a blob's layers
+	layerPosition map[digest.Digest]int
+}
+
+// expectedLayerDiffIDFlag is a per-layer flag containing an UNTRUSTED uncompressed digest of the layer.
+// It is set when pulling a layer by TOC; later, this value is used with digestToLayerID
+// to allow identifying the layer — and the consumer is expected to verify the blob returned by GetBlob against the digest.
 const expectedLayerDiffIDFlag = "expected-layer-diffid"
 
 // newImageSource sets up an image for reading.
@@ -71,11 +73,13 @@ func newImageSource(sys *types.SystemContext, imageRef storageReference) (*stora
 		}),
 		NoGetBlobAtInitialize: stubs.NoGetBlobAt(imageRef),
 
-		imageRef:        imageRef,
-		systemContext:   sys,
-		image:           img,
-		SignatureSizes:  []int{},
-		SignaturesSizes: make(map[digest.Digest][]int),
+		imageRef:      imageRef,
+		systemContext: sys,
+		image:         img,
+		metadata: storageImageMetadata{
+			SignatureSizes:  []int{},
+			SignaturesSizes: make(map[digest.Digest][]int),
+		},
 		getBlobMutexProtected: getBlobMutexProtected{
 			digestToLayerID: make(map[digest.Digest]string),
 			layerPosition:   make(map[digest.Digest]int),
@@ -83,7 +87,7 @@ func newImageSource(sys *types.SystemContext, imageRef storageReference) (*stora
 	}
 	image.Compat = impl.AddCompat(image)
 	if img.Metadata != "" {
-		if err := json.Unmarshal([]byte(img.Metadata), image); err != nil {
+		if err := json.Unmarshal([]byte(img.Metadata), &image.metadata); err != nil {
 			return nil, fmt.Errorf("decoding metadata for source image: %w", err)
 		}
 	}
@@ -103,12 +107,11 @@ func (s *storageImageSource) Close() error {
 // GetBlob returns a stream for the specified blob, and the blob’s size (or -1 if unknown).
 // The Digest field in BlobInfo is guaranteed to be provided, Size may be -1 and MediaType may be optionally provided.
 // May update BlobInfoCache, preferably after it knows for certain that a blob truly exists at a specific location.
-func (s *storageImageSource) GetBlob(ctx context.Context, info types.BlobInfo, cache types.BlobInfoCache) (rc io.ReadCloser, n int64, err error) {
+func (s *storageImageSource) GetBlob(ctx context.Context, info types.BlobInfo, cache types.BlobInfoCache) (io.ReadCloser, int64, error) {
 	// We need a valid digest value.
 	digest := info.Digest
 
-	err = digest.Validate()
-	if err != nil {
+	if err := digest.Validate(); err != nil {
 		return nil, 0, err
 	}
 
@@ -118,8 +121,9 @@ func (s *storageImageSource) GetBlob(ctx context.Context, info types.BlobInfo, c
 
 	var layers []storage.Layer
 
-	// If the digest was overridden by LayerInfosForCopy, then we need to use the TOC digest
-	// to retrieve it from the storage.
+	// This lookup path is strictly necessary for layers identified by TOC digest
+	// (where LayersByUncompressedDigest might not find our layer);
+	// for other layers it is an optimization to avoid the cost of the LayersByUncompressedDigest call.
 	s.getBlobMutex.Lock()
 	layerID, found := s.getBlobMutexProtected.digestToLayerID[digest]
 	s.getBlobMutex.Unlock()
@@ -149,7 +153,7 @@ func (s *storageImageSource) GetBlob(ctx context.Context, info types.BlobInfo, c
 	// NOTE: the blob is first written to a temporary file and subsequently
 	// closed.  The intention is to keep the time we own the storage lock
 	// as short as possible to allow other processes to access the storage.
-	rc, n, _, err = s.getBlobAndLayerID(digest, layers)
+	rc, n, _, err := s.getBlobAndLayerID(digest, layers)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -172,7 +176,7 @@ func (s *storageImageSource) GetBlob(ctx context.Context, info types.BlobInfo, c
 	// On Unix and modern Windows (2022 at least) we can eagerly unlink the file to ensure it's automatically
 	// cleaned up on process termination (or if the caller forgets to invoke Close())
 	// On older versions of Windows we will have to fallback to relying on the caller to invoke Close()
-	if err := os.Remove(tmpFile.Name()); err != nil {
+	if err := os.Remove(tmpFile.Name()); err == nil {
 		tmpFileRemovePending = false
 	}
 
@@ -232,7 +236,10 @@ func (s *storageImageSource) getBlobAndLayerID(digest digest.Digest, layers []st
 // GetManifest() reads the image's manifest.
 func (s *storageImageSource) GetManifest(ctx context.Context, instanceDigest *digest.Digest) (manifestBlob []byte, mimeType string, err error) {
 	if instanceDigest != nil {
-		key := manifestBigDataKey(*instanceDigest)
+		key, err := manifestBigDataKey(*instanceDigest)
+		if err != nil {
+			return nil, "", err
+		}
 		blob, err := s.imageRef.transport.store.ImageBigData(s.image.ID, key)
 		if err != nil {
 			return nil, "", fmt.Errorf("reading manifest for image instance %q: %w", *instanceDigest, err)
@@ -244,7 +251,10 @@ func (s *storageImageSource) GetManifest(ctx context.Context, instanceDigest *di
 		// Prefer the manifest corresponding to the user-specified digest, if available.
 		if s.imageRef.named != nil {
 			if digested, ok := s.imageRef.named.(reference.Digested); ok {
-				key := manifestBigDataKey(digested.Digest())
+				key, err := manifestBigDataKey(digested.Digest())
+				if err != nil {
+					return nil, "", err
+				}
 				blob, err := s.imageRef.transport.store.ImageBigData(s.image.ID, key)
 				if err != nil && !os.IsNotExist(err) { // os.IsNotExist is true if the image exists but there is no data corresponding to key
 					return nil, "", err
@@ -297,36 +307,37 @@ func (s *storageImageSource) LayerInfosForCopy(ctx context.Context, instanceDige
 		if err != nil {
 			return nil, fmt.Errorf("reading layer %q in image %q: %w", layerID, s.image.ID, err)
 		}
-		if layer.UncompressedDigest == "" && layer.TOCDigest == "" {
-			return nil, fmt.Errorf("uncompressed digest and TOC digest for layer %q is unknown", layerID)
-		}
-		if layer.UncompressedSize < 0 {
-			return nil, fmt.Errorf("uncompressed size for layer %q is unknown", layerID)
-		}
 
 		blobDigest := layer.UncompressedDigest
-
-		if layer.TOCDigest != "" {
+		if blobDigest == "" {
+			if layer.TOCDigest == "" {
+				return nil, fmt.Errorf("uncompressed digest and TOC digest for layer %q is unknown", layerID)
+			}
 			if layer.Flags == nil || layer.Flags[expectedLayerDiffIDFlag] == nil {
 				return nil, fmt.Errorf("TOC digest %q for layer %q is present but %q flag is not set", layer.TOCDigest, layerID, expectedLayerDiffIDFlag)
 			}
-			if expectedDigest, ok := layer.Flags[expectedLayerDiffIDFlag].(string); ok {
-				// if the layer is stored by its TOC, report the expected diffID as the layer Digest
-				// but store the TOC digest so we can later retrieve it from the storage.
-				blobDigest, err = digest.Parse(expectedDigest)
-				if err != nil {
-					return nil, fmt.Errorf("parsing expected diffID %q for layer %q: %w", expectedDigest, layerID, err)
-				}
-			} else {
+			expectedDigest, ok := layer.Flags[expectedLayerDiffIDFlag].(string)
+			if !ok {
 				return nil, fmt.Errorf("TOC digest %q for layer %q is present but %q flag is not a string", layer.TOCDigest, layerID, expectedLayerDiffIDFlag)
 			}
+			// If the layer is stored by its TOC, report the expected diffID as the layer Digest;
+			// the generic code is responsible for validating the digest.
+			// We can locate the layer without further c/storage help using s.getBlobMutexProtected.digestToLayerID.
+			blobDigest, err = digest.Parse(expectedDigest)
+			if err != nil {
+				return nil, fmt.Errorf("parsing expected diffID %q for layer %q: %w", expectedDigest, layerID, err)
+			}
+		}
+		size := layer.UncompressedSize
+		if size < 0 {
+			size = -1
 		}
 		s.getBlobMutex.Lock()
 		s.getBlobMutexProtected.digestToLayerID[blobDigest] = layer.ID
 		s.getBlobMutex.Unlock()
 		blobInfo := types.BlobInfo{
 			Digest:    blobDigest,
-			Size:      layer.UncompressedSize,
+			Size:      size,
 			MediaType: uncompressedLayerType,
 		}
 		physicalBlobInfos = append([]types.BlobInfo{blobInfo}, physicalBlobInfos...)
@@ -375,12 +386,19 @@ func buildLayerInfosForCopy(manifestInfos []manifest.LayerInfo, physicalInfos []
 func (s *storageImageSource) GetSignaturesWithFormat(ctx context.Context, instanceDigest *digest.Digest) ([]signature.Signature, error) {
 	var offset int
 	signatureBlobs := []byte{}
-	signatureSizes := s.SignatureSizes
+	signatureSizes := s.metadata.SignatureSizes
 	key := "signatures"
 	instance := "default instance"
 	if instanceDigest != nil {
-		signatureSizes = s.SignaturesSizes[*instanceDigest]
-		key = signatureBigDataKey(*instanceDigest)
+		signatureSizes = s.metadata.SignaturesSizes[*instanceDigest]
+		k, err := signatureBigDataKey(*instanceDigest)
+		if err != nil {
+			return nil, err
+		}
+		key = k
+		if err := instanceDigest.Validate(); err != nil { // digest.Digest.Encoded() panics on failure, so validate explicitly.
+			return nil, err
+		}
 		instance = instanceDigest.Encoded()
 	}
 	if len(signatureSizes) > 0 {
@@ -425,7 +443,7 @@ func (s *storageImageSource) getSize() (int64, error) {
 		sum += bigSize
 	}
 	// Add the signature sizes.
-	for _, sigSize := range s.SignatureSizes {
+	for _, sigSize := range s.metadata.SignatureSizes {
 		sum += int64(sigSize)
 	}
 	// Walk the layer list.
@@ -435,10 +453,16 @@ func (s *storageImageSource) getSize() (int64, error) {
 		if err != nil {
 			return -1, err
 		}
-		if (layer.TOCDigest == "" && layer.UncompressedDigest == "") || layer.UncompressedSize < 0 {
+		if (layer.TOCDigest == "" && layer.UncompressedDigest == "") || (layer.TOCDigest == "" && layer.UncompressedSize < 0) {
 			return -1, fmt.Errorf("size for layer %q is unknown, failing getSize()", layerID)
 		}
-		sum += layer.UncompressedSize
+		// FIXME: We allow layer.UncompressedSize < 0 above, because currently images in an Additional Layer Store don’t provide that value.
+		// Right now, various callers in Podman (and, also, newImage in this package) don’t expect the size computation to fail.
+		// Should we update the callers, or do we need to continue returning inaccurate information here? Or should we pay the cost
+		// to compute the size from the diff?
+		if layer.UncompressedSize >= 0 {
+			sum += layer.UncompressedSize
+		}
 		if layer.Parent == "" {
 			break
 		}

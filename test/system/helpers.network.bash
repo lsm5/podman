@@ -1,5 +1,7 @@
 # -*- bash -*-
 
+_cached_has_pasta=
+_cached_has_slirp4netns=
 
 ### Feature Checks #############################################################
 
@@ -31,9 +33,28 @@ function skip_if_no_ipv6() {
     fi
 }
 
+# has_slirp4netns - Check if the slirp4netns(1) command is available
+function has_slirp4netns() {
+    if [[ -z "$_cached_has_slirp4netns" ]]; then
+        _cached_has_slirp4netns=n
+        run_podman info --format '{{.Host.Slirp4NetNS.Executable}}'
+        if [[ -n "$output" ]]; then
+            _cached_has_slirp4netns=y
+        fi
+    fi
+    test "$_cached_has_slirp4netns" = "y"
+}
+
 # has_pasta() - Check if the pasta(1) command is available
 function has_pasta() {
-    command -v pasta >/dev/null
+    if [[ -z "$_cached_has_pasta" ]]; then
+        _cached_has_pasta=n
+        run_podman info --format '{{.Host.Pasta.Executable}}'
+        if [[ -n "$output" ]]; then
+            _cached_has_pasta=y
+        fi
+    fi
+    test "$_cached_has_pasta" = "y"
 }
 
 # skip_if_no_pasta() - Skip current test if pasta(1) is not available
@@ -208,15 +229,31 @@ EOF
 # ipv4_get_route_default() - Print first default IPv4 route reported by netlink
 # $1:	Optional output of 'ip -j -4 route show' from a different context
 function ipv4_get_route_default() {
-    local jq_expr='[.[] | select(.dst == "default").gateway] | .[0]'
-    echo "${1:-$(ip -j -4 route show)}" | jq -rM "${jq_expr}"
+    local jq_gw='[.[] | select(.dst == "default").gateway] | .[0]'
+    local jq_nh='[.[] | select(.dst == "default").nexthops[0].gateway] | .[0]'
+    local out
+
+    out="$(echo "${1:-$(ip -j -4 route show)}" | jq -rM "${jq_gw}")"
+    if [ "${out}" = "null" ]; then
+        out="$(echo "${1:-$(ip -j -4 route show)}" | jq -rM "${jq_nh}")"
+    fi
+
+    echo "${out}"
 }
 
 # ipv6_get_route_default() - Print first default IPv6 route reported by netlink
 # $1:	Optional output of 'ip -j -6 route show' from a different context
 function ipv6_get_route_default() {
-    local jq_expr='[.[] | select(.dst == "default").gateway] | .[0]'
-    echo "${1:-$(ip -j -6 route show)}" | jq -rM "${jq_expr}"
+    local jq_gw='[.[] | select(.dst == "default").gateway] | .[0]'
+    local jq_nh='[.[] | select(.dst == "default").nexthops[0].gateway] | .[0]'
+    local out
+
+    out="$(echo "${1:-$(ip -j -6 route show)}" | jq -rM "${jq_gw}")"
+    if [ "${out}" = "null" ]; then
+        out="$(echo "${1:-$(ip -j -6 route show)}" | jq -rM "${jq_nh}")"
+    fi
+
+    echo "${out}"
 }
 
 # ether_get_mtu() - Get MTU of first Ethernet-like link
@@ -368,4 +405,28 @@ function tcp_port_probe() {
     local address="${2:-0.0.0.0}"
 
     : | nc "${address}" "${1}"
+}
+
+### Pasta Helpers ##############################################################
+
+function default_ifname() {
+    local jq_expr='[.[] | select(.dst == "default").dev] | .[0]'
+    local jq_expr_nh='[.[] | select(.dst == "default").nexthops[0].dev] | .[0]'
+    local ip_ver="${1}"
+    local out
+
+    out="$(ip -j -"${ip_ver}" route show | jq -rM "${jq_expr}")"
+    if [ "${out}" = "null" ]; then
+        out="$(ip -j -"${ip_ver}" route show | jq -rM "${jq_expr_nh}")"
+    fi
+
+    echo "${out}"
+}
+
+function default_addr() {
+    local ip_ver="${1}"
+    local ifname="${2:-$(default_ifname "${ip_ver}")}"
+
+    local expr='[.[0].addr_info[] | select(.deprecated != true)][0].local'
+    ip -j -"${ip_ver}" addr show "${ifname}" | jq -rM "${expr}"
 }

@@ -15,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/containers/buildah/pkg/parse"
 	"github.com/containers/common/libimage"
 	"github.com/containers/common/libnetwork/network"
@@ -33,16 +31,20 @@ import (
 	"github.com/containers/podman/v5/libpod/lock"
 	"github.com/containers/podman/v5/libpod/plugin"
 	"github.com/containers/podman/v5/libpod/shutdown"
+	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/rootless"
 	"github.com/containers/podman/v5/pkg/systemd"
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/containers/storage"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/lockfile"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/docker/docker/pkg/namesgenerator"
+	"github.com/hashicorp/go-multierror"
 	jsoniter "github.com/json-iterator/go"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/exp/slices"
 )
 
 // Set up the JSON library for all of Libpod
@@ -141,7 +143,7 @@ func SetXdgDirs() error {
 
 	if rootless.IsRootless() && os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
 		sessionAddr := filepath.Join(runtimeDir, "bus")
-		if _, err := os.Stat(sessionAddr); err == nil {
+		if err := fileutils.Exists(sessionAddr); err == nil {
 			os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=%s", sessionAddr))
 		}
 	}
@@ -309,7 +311,7 @@ func getDBState(runtime *Runtime) (State, error) {
 	switch backend {
 	case config.DBBackendDefault:
 		// for backwards compatibility check if boltdb exists, if it does not we use sqlite
-		if _, err := os.Stat(boltDBPath); err != nil {
+		if err := fileutils.Exists(boltDBPath); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				// need to set DBBackend string so podman info will show the backend name correctly
 				runtime.config.Engine.DBBackend = config.DBBackendSQLite.String()
@@ -392,32 +394,7 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 
 	runtime.mergeDBConfig(dbConfig)
 
-	unified, _ := cgroups.IsCgroup2UnifiedMode()
-	// DELETE ON RHEL9
-	if !unified {
-		_, ok := os.LookupEnv("PODMAN_IGNORE_CGROUPSV1_WARNING")
-		if !ok {
-			logrus.Warn("Using cgroups-v1 which is deprecated in favor of cgroups-v2 with Podman v5 and will be removed in a future version. Set environment variable `PODMAN_IGNORE_CGROUPSV1_WARNING` to hide this warning.")
-		}
-	}
-	// DELETE ON RHEL9
-
-	if unified && rootless.IsRootless() && !systemd.IsSystemdSessionValid(rootless.GetRootlessUID()) {
-		// If user is rootless and XDG_RUNTIME_DIR is found, podman will not proceed with /tmp directory
-		// it will try to use existing XDG_RUNTIME_DIR
-		// if current user has no write access to XDG_RUNTIME_DIR we will fail later
-		if err := unix.Access(runtime.storageConfig.RunRoot, unix.W_OK); err != nil {
-			msg := fmt.Sprintf("RunRoot is pointing to a path (%s) which is not writable. Most likely podman will fail.", runtime.storageConfig.RunRoot)
-			if errors.Is(err, os.ErrNotExist) {
-				// if dir does not exist, try to create it
-				if err := os.MkdirAll(runtime.storageConfig.RunRoot, 0700); err != nil {
-					logrus.Warn(msg)
-				}
-			} else {
-				logrus.Warnf("%s: %v", msg, err)
-			}
-		}
-	}
+	checkCgroups2UnifiedMode(runtime)
 
 	logrus.Debugf("Using graph driver %s", runtime.storageConfig.GraphDriverName)
 	logrus.Debugf("Using graph root %s", runtime.storageConfig.GraphRoot)
@@ -464,7 +441,7 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 			}
 		}
 
-		return err
+		return fmt.Errorf("configure storage: %w", err)
 	}
 	defer func() {
 		if retErr != nil && store != nil {
@@ -570,7 +547,7 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		}
 	}()
 
-	_, err = os.Stat(runtimeAliveFile)
+	err = fileutils.Exists(runtimeAliveFile)
 	if err != nil {
 		// If we need to refresh, then it is safe to assume there are
 		// no containers running.  Create immediately a namespace, as
@@ -642,13 +619,18 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		// Ensure we have a store before refresh occurs
 		if runtime.store == nil {
 			if err := runtime.configureStore(); err != nil {
-				return err
+				return fmt.Errorf("configure storage: %w", err)
 			}
 		}
 
 		if err2 := runtime.refresh(ctx, runtimeAliveFile); err2 != nil {
 			return err2
 		}
+	}
+
+	// Check current boot ID - will be written to the alive file.
+	if err := runtime.checkBootID(runtimeAliveFile); err != nil {
+		return err
 	}
 
 	runtime.startWorker()
@@ -696,15 +678,16 @@ func (r *Runtime) GetConfig() (*config.Config, error) {
 
 // libimageEventsMap translates a libimage event type to a libpod event status.
 var libimageEventsMap = map[libimage.EventType]events.Status{
-	libimage.EventTypeImagePull:    events.Pull,
-	libimage.EventTypeImagePush:    events.Push,
-	libimage.EventTypeImageRemove:  events.Remove,
-	libimage.EventTypeImageLoad:    events.LoadFromArchive,
-	libimage.EventTypeImageSave:    events.Save,
-	libimage.EventTypeImageTag:     events.Tag,
-	libimage.EventTypeImageUntag:   events.Untag,
-	libimage.EventTypeImageMount:   events.Mount,
-	libimage.EventTypeImageUnmount: events.Unmount,
+	libimage.EventTypeImagePull:      events.Pull,
+	libimage.EventTypeImagePullError: events.PullError,
+	libimage.EventTypeImagePush:      events.Push,
+	libimage.EventTypeImageRemove:    events.Remove,
+	libimage.EventTypeImageLoad:      events.LoadFromArchive,
+	libimage.EventTypeImageSave:      events.Save,
+	libimage.EventTypeImageTag:       events.Tag,
+	libimage.EventTypeImageUntag:     events.Untag,
+	libimage.EventTypeImageMount:     events.Mount,
+	libimage.EventTypeImageUnmount:   events.Unmount,
 }
 
 // libimageEvents spawns a goroutine which will listen for events on
@@ -735,6 +718,9 @@ func (r *Runtime) libimageEvents() {
 					Status: toLibpodEventStatus(libimageEvent),
 					Time:   libimageEvent.Time,
 					Type:   events.Image,
+				}
+				if libimageEvent.Error != nil {
+					e.Error = libimageEvent.Error.Error()
 				}
 				if err := r.eventer.Write(e); err != nil {
 					logrus.Errorf("Unable to write image event: %q", err)
@@ -1265,4 +1251,134 @@ func (r *Runtime) LockConflicts() (map[uint32][]string, []uint32, error) {
 	}
 
 	return toReturn, locksHeld, nil
+}
+
+// SystemCheck checks our storage for consistency, and depending on the options
+// specified, will attempt to remove anything which fails consistency checks.
+func (r *Runtime) SystemCheck(ctx context.Context, options entities.SystemCheckOptions) (entities.SystemCheckReport, error) {
+	what := storage.CheckEverything()
+	if options.Quick {
+		what = storage.CheckMost()
+	}
+	if options.UnreferencedLayerMaximumAge != nil {
+		tmp := *options.UnreferencedLayerMaximumAge
+		what.LayerUnreferencedMaximumAge = &tmp
+	}
+	storageReport, err := r.store.Check(what)
+	if err != nil {
+		return entities.SystemCheckReport{}, err
+	}
+	if len(storageReport.Containers) == 0 &&
+		len(storageReport.Layers) == 0 &&
+		len(storageReport.ROLayers) == 0 &&
+		len(storageReport.Images) == 0 &&
+		len(storageReport.ROImages) == 0 {
+		// no errors detected
+		return entities.SystemCheckReport{}, nil
+	}
+	mapErrorSlicesToStringSlices := func(m map[string][]error) map[string][]string {
+		if len(m) == 0 {
+			return nil
+		}
+		mapped := make(map[string][]string, len(m))
+		for k, errs := range m {
+			strs := make([]string, len(errs))
+			for i, e := range errs {
+				strs[i] = e.Error()
+			}
+			mapped[k] = strs
+		}
+		return mapped
+	}
+
+	report := entities.SystemCheckReport{
+		Errors:     true,
+		Layers:     mapErrorSlicesToStringSlices(storageReport.Layers),
+		ROLayers:   mapErrorSlicesToStringSlices(storageReport.ROLayers),
+		Images:     mapErrorSlicesToStringSlices(storageReport.Images),
+		ROImages:   mapErrorSlicesToStringSlices(storageReport.ROImages),
+		Containers: mapErrorSlicesToStringSlices(storageReport.Containers),
+	}
+	if !options.Repair && report.Errors {
+		// errors detected, no corrective measures to be taken
+		return report, err
+	}
+
+	// get a list of images that we knew of before we tried to clean up any
+	// that were damaged
+	imagesBefore, err := r.store.Images()
+	if err != nil {
+		return report, fmt.Errorf("getting a list of images before attempting repairs: %w", err)
+	}
+
+	repairOptions := storage.RepairOptions{
+		RemoveContainers: options.RepairLossy,
+	}
+	var containers []*Container
+	if repairOptions.RemoveContainers {
+		// build a list of the containers that we claim as ours that we
+		// expect to be removing in a bit
+		for containerID := range storageReport.Containers {
+			ctr, lookupErr := r.state.LookupContainer(containerID)
+			if lookupErr != nil {
+				// we're about to remove it, so it's okay that
+				// it isn't even one of ours
+				continue
+			}
+			containers = append(containers, ctr)
+		}
+	}
+
+	// run the cleanup
+	merr := multierror.Append(nil, r.store.Repair(storageReport, &repairOptions)...)
+
+	if repairOptions.RemoveContainers {
+		// get the list of containers that storage will still admit to knowing about
+		containersAfter, err := r.store.Containers()
+		if err != nil {
+			merr = multierror.Append(merr, fmt.Errorf("getting a list of containers after attempting repairs: %w", err))
+		}
+		for _, ctr := range containers {
+			// if one of our containers that we tried to remove is
+			// still on disk, report an error
+			if slices.IndexFunc(containersAfter, func(containerAfter storage.Container) bool {
+				return containerAfter.ID == ctr.ID()
+			}) != -1 {
+				merr = multierror.Append(merr, fmt.Errorf("clearing storage for container %s: %w", ctr.ID(), err))
+				continue
+			}
+			// remove the container from our database
+			if removeErr := r.state.RemoveContainer(ctr); removeErr != nil {
+				merr = multierror.Append(merr, fmt.Errorf("updating state database to reflect removal of container %s: %w", ctr.ID(), removeErr))
+				continue
+			}
+			if report.RemovedContainers == nil {
+				report.RemovedContainers = make(map[string]string)
+			}
+			report.RemovedContainers[ctr.ID()] = ctr.config.Name
+		}
+	}
+
+	// get a list of images that are still around after we clean up any
+	// that were damaged
+	imagesAfter, err := r.store.Images()
+	if err != nil {
+		merr = multierror.Append(merr, fmt.Errorf("getting a list of images after attempting repairs: %w", err))
+	}
+	for _, imageBefore := range imagesBefore {
+		if slices.IndexFunc(imagesAfter, func(imageAfter storage.Image) bool {
+			return imageAfter.ID == imageBefore.ID
+		}) == -1 {
+			if report.RemovedImages == nil {
+				report.RemovedImages = make(map[string][]string)
+			}
+			report.RemovedImages[imageBefore.ID] = slices.Clone(imageBefore.Names)
+		}
+	}
+
+	if merr != nil {
+		err = merr.ErrorOrNil()
+	}
+
+	return report, err
 }

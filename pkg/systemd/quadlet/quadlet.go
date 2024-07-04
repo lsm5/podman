@@ -11,6 +11,7 @@ import (
 
 	"github.com/containers/podman/v5/pkg/specgenutilexternal"
 	"github.com/containers/podman/v5/pkg/systemd/parser"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/regexp"
 )
 
@@ -34,12 +35,14 @@ const (
 	UnitGroup       = "Unit"
 	VolumeGroup     = "Volume"
 	ImageGroup      = "Image"
+	BuildGroup      = "Build"
 	XContainerGroup = "X-Container"
 	XKubeGroup      = "X-Kube"
 	XNetworkGroup   = "X-Network"
 	XPodGroup       = "X-Pod"
 	XVolumeGroup    = "X-Volume"
 	XImageGroup     = "X-Image"
+	XBuildGroup     = "X-Build"
 )
 
 // Systemd Unit file keys
@@ -77,10 +80,13 @@ const (
 	KeyExec                  = "Exec"
 	KeyExitCodePropagation   = "ExitCodePropagation"
 	KeyExposeHostPort        = "ExposeHostPort"
+	KeyFile                  = "File"
+	KeyForceRM               = "ForceRM"
 	KeyGateway               = "Gateway"
 	KeyGIDMap                = "GIDMap"
 	KeyGlobalArgs            = "GlobalArgs"
 	KeyGroup                 = "Group"
+	KeyGroupAdd              = "GroupAdd"
 	KeyHealthCmd             = "HealthCmd"
 	KeyHealthInterval        = "HealthInterval"
 	KeyHealthOnFailure       = "HealthOnFailure"
@@ -104,6 +110,7 @@ const (
 	KeyKubeDownForce         = "KubeDownForce"
 	KeyLabel                 = "Label"
 	KeyLogDriver             = "LogDriver"
+	KeyLogOpt                = "LogOpt"
 	KeyMask                  = "Mask"
 	KeyMount                 = "Mount"
 	KeyNetwork               = "Network"
@@ -140,6 +147,7 @@ const (
 	KeySubnet                = "Subnet"
 	KeySubUIDMap             = "SubUIDMap"
 	KeySysctl                = "Sysctl"
+	KeyTarget                = "Target"
 	KeyTimezone              = "Timezone"
 	KeyTLSVerify             = "TLSVerify"
 	KeyTmpfs                 = "Tmpfs"
@@ -163,6 +171,7 @@ type PodInfo struct {
 }
 
 var (
+	URL            = regexp.Delayed(`^((https?)|(git)://)|(github\.com/).+$`)
 	validPortRange = regexp.Delayed(`\d+(-\d+)?(/udp|/tcp)?$`)
 
 	// Supported keys in "Container" group
@@ -186,6 +195,7 @@ var (
 		KeyGIDMap:                true,
 		KeyGlobalArgs:            true,
 		KeyGroup:                 true,
+		KeyGroupAdd:              true,
 		KeyHealthCmd:             true,
 		KeyHealthInterval:        true,
 		KeyHealthOnFailure:       true,
@@ -203,6 +213,7 @@ var (
 		KeyImage:                 true,
 		KeyLabel:                 true,
 		KeyLogDriver:             true,
+		KeyLogOpt:                true,
 		KeyMask:                  true,
 		KeyMount:                 true,
 		KeyNetwork:               true,
@@ -290,6 +301,7 @@ var (
 		KeyGlobalArgs:           true,
 		KeyKubeDownForce:        true,
 		KeyLogDriver:            true,
+		KeyLogOpt:               true,
 		KeyNetwork:              true,
 		KeyPodmanArgs:           true,
 		KeyPublishPort:          true,
@@ -320,6 +332,33 @@ var (
 		KeyVariant:              true,
 	}
 
+	// Supported keys in "Build" group
+	supportedBuildKeys = map[string]bool{
+		KeyAnnotation:           true,
+		KeyArch:                 true,
+		KeyAuthFile:             true,
+		KeyContainersConfModule: true,
+		KeyDNS:                  true,
+		KeyDNSOption:            true,
+		KeyDNSSearch:            true,
+		KeyEnvironment:          true,
+		KeyFile:                 true,
+		KeyForceRM:              true,
+		KeyGlobalArgs:           true,
+		KeyGroupAdd:             true,
+		KeyImageTag:             true,
+		KeyLabel:                true,
+		KeyNetwork:              true,
+		KeyPodmanArgs:           true,
+		KeyPull:                 true,
+		KeySecret:               true,
+		KeySetWorkingDirectory:  true,
+		KeyTarget:               true,
+		KeyTLSVerify:            true,
+		KeyVariant:              true,
+		KeyVolume:               true,
+	}
+
 	supportedPodKeys = map[string]bool{
 		KeyContainersConfModule: true,
 		KeyGlobalArgs:           true,
@@ -340,6 +379,10 @@ func replaceExtension(name string, extension string, extraPrefix string, extraSu
 	}
 
 	return extraPrefix + baseName + extraSuffix + extension
+}
+
+func isURL(urlCandidate string) bool {
+	return URL.MatchString(urlCandidate)
 }
 
 func isPortRange(port string) bool {
@@ -408,6 +451,14 @@ func ConvertContainer(container *parser.UnitFile, names map[string]string, isUse
 	service := container.Dup()
 	service.Filename = replaceExtension(container.Filename, ".service", "", "")
 
+	// Add a dependency on network-online.target so the image pull does not happen
+	// before network is ready
+	// https://github.com/containers/podman/issues/21873
+	// Prepend the lines, so the user-provided values
+	// override the default ones.
+	service.PrependUnitLine(UnitGroup, "After", "network-online.target")
+	service.PrependUnitLine(UnitGroup, "Wants", "network-online.target")
+
 	if container.Path != "" {
 		service.Add(UnitGroup, "SourcePath", container.Path)
 	}
@@ -440,7 +491,7 @@ func ConvertContainer(container *parser.UnitFile, names map[string]string, isUse
 	if !ok || len(containerName) == 0 {
 		// By default, We want to name the container by the service name
 		if strings.Contains(container.Filename, "@") {
-			containerName = "systemd-%P_%I"
+			containerName = "systemd-%p_%i"
 		} else {
 			containerName = "systemd-%N"
 		}
@@ -496,6 +547,7 @@ func ConvertContainer(container *parser.UnitFile, names map[string]string, isUse
 	)
 
 	handleLogDriver(container, ContainerGroup, podman)
+	handleLogOpt(container, ContainerGroup, podman)
 
 	// We delegate groups to the runtime
 	service.Add(ServiceGroup, "Delegate", "yes")
@@ -589,7 +641,7 @@ func ConvertContainer(container *parser.UnitFile, names map[string]string, isUse
 	for _, device := range devices {
 		if device[0] == '-' {
 			device = device[1:]
-			_, err := os.Stat(strings.Split(device, ":")[0])
+			err := fileutils.Exists(strings.Split(device, ":")[0])
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -669,6 +721,13 @@ func ConvertContainer(container *parser.UnitFile, names map[string]string, isUse
 
 	if err := handleUserMappings(container, ContainerGroup, podman, isUser, true); err != nil {
 		return nil, err
+	}
+
+	groupsAdd := container.LookupAll(ContainerGroup, KeyGroupAdd)
+	for _, groupAdd := range groupsAdd {
+		if len(groupAdd) > 0 {
+			podman.addf("--group-add=%s", groupAdd)
+		}
 	}
 
 	tmpfsValues := container.LookupAll(ContainerGroup, KeyTmpfs)
@@ -1109,6 +1168,7 @@ func ConvertKube(kube *parser.UnitFile, names map[string]string, isUser bool) (*
 	}
 
 	handleLogDriver(kube, KubeGroup, execStart)
+	handleLogOpt(kube, KubeGroup, execStart)
 
 	if err := handleUserMappings(kube, KubeGroup, execStart, isUser, false); err != nil {
 		return nil, err
@@ -1160,7 +1220,7 @@ func ConvertKube(kube *parser.UnitFile, names map[string]string, isUser bool) (*
 	execStop.add(yamlPath)
 	service.AddCmdline(ServiceGroup, "ExecStopPost", execStop.Args)
 
-	err = handleSetWorkingDirectory(kube, service)
+	_, err = handleSetWorkingDirectory(kube, service, KubeGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -1171,6 +1231,14 @@ func ConvertKube(kube *parser.UnitFile, names map[string]string, isUser bool) (*
 func ConvertImage(image *parser.UnitFile) (*parser.UnitFile, string, error) {
 	service := image.Dup()
 	service.Filename = replaceExtension(image.Filename, ".service", "", "-image")
+
+	// Add a dependency on network-online.target so the image pull does not happen
+	// before network is ready
+	// https://github.com/containers/podman/issues/21873
+	// Prepend the lines, so the user-provided values
+	// override the default ones.
+	service.PrependUnitLine(UnitGroup, "After", "network-online.target")
+	service.PrependUnitLine(UnitGroup, "Wants", "network-online.target")
 
 	if image.Path != "" {
 		service.Add(UnitGroup, "SourcePath", image.Path)
@@ -1236,6 +1304,157 @@ func ConvertImage(image *parser.UnitFile) (*parser.UnitFile, string, error) {
 	}
 
 	return service, imageName, nil
+}
+
+func ConvertBuild(build *parser.UnitFile, names map[string]string) (*parser.UnitFile, string, error) {
+	service := build.Dup()
+	service.Filename = replaceExtension(build.Filename, ".service", "", "-build")
+
+	// Add a dependency on network-online.target so the image pull does not happen
+	// before network is ready
+	// https://github.com/containers/podman/issues/21873
+	// Prepend the lines, so the user-provided values
+	// override the default ones.
+	service.PrependUnitLine(UnitGroup, "After", "network-online.target")
+	service.PrependUnitLine(UnitGroup, "Wants", "network-online.target")
+
+	/* Rename old Build group to X-Build so that systemd ignores it */
+	service.RenameGroup(BuildGroup, XBuildGroup)
+
+	// Need the containers filesystem mounted to start podman
+	service.Add(UnitGroup, "RequiresMountsFor", "%t/containers")
+
+	if build.Path != "" {
+		service.Add(UnitGroup, "SourcePath", build.Path)
+	}
+
+	if err := checkForUnknownKeys(build, BuildGroup, supportedBuildKeys); err != nil {
+		return nil, "", err
+	}
+
+	podman := createBasePodmanCommand(build, BuildGroup)
+	podman.add("build")
+
+	stringKeys := map[string]string{
+		KeyArch:     "--arch",
+		KeyAuthFile: "--authfile",
+		KeyPull:     "--pull",
+		KeyTarget:   "--target",
+		KeyVariant:  "--variant",
+	}
+
+	boolKeys := map[string]string{
+		KeyTLSVerify: "--tls-verify",
+		KeyForceRM:   "--force-rm",
+	}
+
+	for key, flag := range stringKeys {
+		lookupAndAddString(build, BuildGroup, key, flag, podman)
+	}
+
+	for key, flag := range boolKeys {
+		lookupAndAddBoolean(build, BuildGroup, key, flag, podman)
+	}
+
+	annotations := build.LookupAllKeyVal(BuildGroup, KeyAnnotation)
+	podman.addAnnotations(annotations)
+
+	dns := build.LookupAll(BuildGroup, KeyDNS)
+	for _, ipAddr := range dns {
+		podman.addf("--dns=%s", ipAddr)
+	}
+
+	dnsOptions := build.LookupAll(BuildGroup, KeyDNSOption)
+	for _, dnsOption := range dnsOptions {
+		podman.addf("--dns-option=%s", dnsOption)
+	}
+
+	dnsSearches := build.LookupAll(BuildGroup, KeyDNSSearch)
+	for _, dnsSearch := range dnsSearches {
+		podman.addf("--dns-search=%s", dnsSearch)
+	}
+
+	podmanEnv := build.LookupAllKeyVal(BuildGroup, KeyEnvironment)
+	podman.addEnv(podmanEnv)
+
+	groupsAdd := build.LookupAll(BuildGroup, KeyGroupAdd)
+	for _, groupAdd := range groupsAdd {
+		if len(groupAdd) > 0 {
+			podman.addf("--group-add=%s", groupAdd)
+		}
+	}
+
+	labels := build.LookupAllKeyVal(BuildGroup, KeyLabel)
+	podman.addLabels(labels)
+
+	builtImageName, ok := names[build.Filename]
+	if !ok {
+		return nil, "", fmt.Errorf("no ImageTag key specified")
+	}
+
+	podman.addf("--tag=%s", builtImageName)
+
+	addNetworks(build, BuildGroup, service, names, podman)
+
+	secrets := build.LookupAllArgs(BuildGroup, KeySecret)
+	for _, secret := range secrets {
+		podman.add("--secret", secret)
+	}
+
+	if err := addVolumes(build, service, BuildGroup, names, podman); err != nil {
+		return nil, "", err
+	}
+
+	// In order to build an image locally, we need either a File key pointing directly at a
+	// Containerfile, or we need a context or WorkingDirectory containing all required files.
+	// SetWorkingDirectory= can also be a path, a URL to either a Containerfile, a Git repo, or
+	// an archive.
+	context, err := handleSetWorkingDirectory(build, service, BuildGroup)
+	if err != nil {
+		return nil, "", err
+	}
+
+	workingDirectory, okWD := service.Lookup(ServiceGroup, ServiceKeyWorkingDirectory)
+	filePath, okFile := build.Lookup(BuildGroup, KeyFile)
+	if (!okWD || len(workingDirectory) == 0) && (!okFile || len(filePath) == 0) && len(context) == 0 {
+		return nil, "", fmt.Errorf("neither SetWorkingDirectory, nor File key specified")
+	}
+
+	if len(filePath) > 0 {
+		podman.addf("--file=%s", filePath)
+	}
+
+	handlePodmanArgs(build, BuildGroup, podman)
+
+	// Context or WorkingDirectory has to be last argument
+	if len(context) > 0 {
+		podman.add(context)
+	} else if !filepath.IsAbs(filePath) && !isURL(filePath) {
+		// Special handling for relative filePaths
+		if len(workingDirectory) == 0 {
+			return nil, "", fmt.Errorf("relative path in File key requires SetWorkingDirectory key to be set")
+		}
+		podman.add(workingDirectory)
+	}
+
+	service.AddCmdline(ServiceGroup, "ExecStart", podman.Args)
+
+	service.Setv(ServiceGroup,
+		"Type", "oneshot",
+		"RemainAfterExit", "yes",
+
+		// The default syslog identifier is the exec basename (podman)
+		// which isn't very useful here
+		"SyslogIdentifier", "%N")
+
+	return service, builtImageName, nil
+}
+
+func GetBuiltImageName(buildUnit *parser.UnitFile) string {
+	if builtImageName, ok := buildUnit.Lookup(BuildGroup, KeyImageTag); ok {
+		return builtImageName
+	}
+	return ""
 }
 
 func GetPodServiceName(podUnit *parser.UnitFile) string {
@@ -1599,6 +1818,13 @@ func handleLogDriver(unitFile *parser.UnitFile, groupName string, podman *Podman
 	}
 }
 
+func handleLogOpt(unitFile *parser.UnitFile, groupName string, podman *PodmanCmdline) {
+	logOpts := unitFile.LookupAllStrv(groupName, KeyLogOpt)
+	for _, logOpt := range logOpts {
+		podman.add("--log-opt", logOpt)
+	}
+}
+
 func handleStorageSource(quadletUnitFile, serviceUnitFile *parser.UnitFile, source string, names map[string]string) (string, error) {
 	if source[0] == '.' {
 		var err error
@@ -1660,39 +1886,67 @@ func handlePodmanArgs(unitFile *parser.UnitFile, groupName string, podman *Podma
 	}
 }
 
-func handleSetWorkingDirectory(kube, serviceUnitFile *parser.UnitFile) error {
-	// If WorkingDirectory is already set in the Service section do not change it
-	workingDir, ok := kube.Lookup(ServiceGroup, ServiceKeyWorkingDirectory)
-	if ok && len(workingDir) > 0 {
-		return nil
-	}
-
-	setWorkingDirectory, ok := kube.Lookup(KubeGroup, KeySetWorkingDirectory)
+func handleSetWorkingDirectory(quadletUnitFile, serviceUnitFile *parser.UnitFile, quadletGroup string) (string, error) {
+	setWorkingDirectory, ok := quadletUnitFile.Lookup(quadletGroup, KeySetWorkingDirectory)
 	if !ok || len(setWorkingDirectory) == 0 {
-		return nil
+		return "", nil
 	}
 
 	var relativeToFile string
+	var context string
 	switch strings.ToLower(setWorkingDirectory) {
 	case "yaml":
-		relativeToFile, ok = kube.Lookup(KubeGroup, KeyYaml)
+		if quadletGroup != KubeGroup {
+			return "", fmt.Errorf("SetWorkingDirectory=%s is only supported in .kube files", setWorkingDirectory)
+		}
+
+		relativeToFile, ok = quadletUnitFile.Lookup(quadletGroup, KeyYaml)
 		if !ok {
-			return fmt.Errorf("no Yaml key specified")
+			return "", fmt.Errorf("no Yaml key specified")
+		}
+	case "file":
+		if quadletGroup != BuildGroup {
+			return "", fmt.Errorf("SetWorkingDirectory=%s is only supported in .build files", setWorkingDirectory)
+		}
+
+		relativeToFile, ok = quadletUnitFile.Lookup(quadletGroup, KeyFile)
+		if !ok {
+			return "", fmt.Errorf("no File key specified")
 		}
 	case "unit":
-		relativeToFile = kube.Path
+		relativeToFile = quadletUnitFile.Path
 	default:
-		return fmt.Errorf("unsupported value for %s: %s ", ServiceKeyWorkingDirectory, setWorkingDirectory)
+		// Path / URL handling is for .build files only
+		if quadletGroup != BuildGroup {
+			return "", fmt.Errorf("unsupported value for %s: %s ", ServiceKeyWorkingDirectory, setWorkingDirectory)
+		}
+
+		// Any value other than the above cases will be returned as context
+		context = setWorkingDirectory
+
+		// If we have a relative path, set the WorkingDirectory to that of the
+		// quadletUnitFile
+		if !filepath.IsAbs(context) {
+			relativeToFile = quadletUnitFile.Path
+		}
 	}
 
-	fileInWorkingDir, err := getAbsolutePath(kube, relativeToFile)
-	if err != nil {
-		return err
+	if len(relativeToFile) > 0 && !isURL(context) {
+		// If WorkingDirectory is already set in the Service section do not change it
+		workingDir, ok := quadletUnitFile.Lookup(ServiceGroup, ServiceKeyWorkingDirectory)
+		if ok && len(workingDir) > 0 {
+			return "", nil
+		}
+
+		fileInWorkingDir, err := getAbsolutePath(quadletUnitFile, relativeToFile)
+		if err != nil {
+			return "", err
+		}
+
+		serviceUnitFile.Add(ServiceGroup, ServiceKeyWorkingDirectory, filepath.Dir(fileInWorkingDir))
 	}
 
-	serviceUnitFile.Add(ServiceGroup, ServiceKeyWorkingDirectory, filepath.Dir(fileInWorkingDir))
-
-	return nil
+	return context, nil
 }
 
 func lookupAndAddString(unit *parser.UnitFile, group, key, flag string, podman *PodmanCmdline) {
@@ -1710,20 +1964,22 @@ func lookupAndAddBoolean(unit *parser.UnitFile, group, key, flag string, podman 
 }
 
 func handleImageSource(quadletImageName string, serviceUnitFile *parser.UnitFile, names map[string]string) (string, error) {
-	if strings.HasSuffix(quadletImageName, ".image") {
-		// since there is no default name conversion, the actual image name must exist in the names map
-		imageName, ok := names[quadletImageName]
-		if !ok {
-			return "", fmt.Errorf("requested Quadlet image %s was not found", imageName)
+	for _, suffix := range []string{".build", ".image"} {
+		if strings.HasSuffix(quadletImageName, suffix) {
+			// since there is no default name conversion, the actual image name must exist in the names map
+			imageName, ok := names[quadletImageName]
+			if !ok {
+				return "", fmt.Errorf("requested Quadlet image %s was not found", quadletImageName)
+			}
+
+			// the systemd unit name is $name-$suffix.service
+			imageServiceName := replaceExtension(quadletImageName, ".service", "", fmt.Sprintf("-%s", suffix[1:]))
+
+			serviceUnitFile.Add(UnitGroup, "Requires", imageServiceName)
+			serviceUnitFile.Add(UnitGroup, "After", imageServiceName)
+
+			quadletImageName = imageName
 		}
-
-		// the systemd unit name is $name-image.service
-		imageServiceName := replaceExtension(quadletImageName, ".service", "", "-image")
-
-		serviceUnitFile.Add(UnitGroup, "Requires", imageServiceName)
-		serviceUnitFile.Add(UnitGroup, "After", imageServiceName)
-
-		quadletImageName = imageName
 	}
 
 	return quadletImageName, nil

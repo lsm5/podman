@@ -13,25 +13,19 @@ import (
 )
 
 var _ = Describe("podman machine set", func() {
-	var (
-		mb      *machineTestBuilder
-		testDir string
-	)
-
-	BeforeEach(func() {
-		testDir, mb = setup()
-	})
-	AfterEach(func() {
-		teardown(originalHomeDir, testDir, mb)
-	})
 
 	It("set machine cpus, disk, memory", func() {
 		skipIfWSL("WSL cannot change set properties of disk, processor, or memory")
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
+
+		setMem := setMachine{}
+		SetMemSession, err := mb.setName(name).setCmd(setMem.withMemory(524288)).run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(SetMemSession).To(Exit(125))
 
 		set := setMachine{}
 		setSession, err := mb.setName(name).setCmd(set.withCPUs(2).withDiskSize(102).withMemory(4096)).run()
@@ -79,7 +73,7 @@ var _ = Describe("podman machine set", func() {
 		skipIfNotVmtype(define.WSLVirt, "tests are only for WSL provider")
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -104,7 +98,7 @@ var _ = Describe("podman machine set", func() {
 		skipIfWSL("WSL cannot change set properties of disk, processor, or memory")
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -138,7 +132,7 @@ var _ = Describe("podman machine set", func() {
 	It("set rootful with docker sock change", func() {
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -176,7 +170,7 @@ var _ = Describe("podman machine set", func() {
 
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
@@ -196,7 +190,7 @@ var _ = Describe("podman machine set", func() {
 	It("set while machine already running", func() {
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath)).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 

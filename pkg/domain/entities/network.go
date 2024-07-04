@@ -75,10 +75,12 @@ type NetworkConnectOptions = entitiesTypes.NetworkConnectOptions
 
 // NetworkPruneReport containers the name of network and an error
 // associated in its pruning (removal)
-// swagger:model NetworkPruneReport
 type NetworkPruneReport = entitiesTypes.NetworkPruneReport
 
 // NetworkPruneOptions describes options for pruning unused networks
 type NetworkPruneOptions struct {
 	Filters map[string][]string
 }
+
+type NetworkInspectReport = entitiesTypes.NetworkInspectReport
+type NetworkContainerInfo = entitiesTypes.NetworkContainerInfo

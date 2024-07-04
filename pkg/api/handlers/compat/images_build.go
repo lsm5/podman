@@ -27,6 +27,7 @@ import (
 	"github.com/containers/podman/v5/pkg/rootless"
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/containers/storage/pkg/archive"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
@@ -50,7 +51,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	contextDirectory, err := extractTarFile(r)
+	anchorDir, err := os.MkdirTemp("", "libpod_builder")
 	if err != nil {
 		utils.InternalServerError(w, err)
 		return
@@ -64,11 +65,17 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		err := os.RemoveAll(filepath.Dir(contextDirectory))
+		err := os.RemoveAll(anchorDir)
 		if err != nil {
-			logrus.Warn(fmt.Errorf("failed to remove build scratch directory %q: %w", filepath.Dir(contextDirectory), err))
+			logrus.Warn(fmt.Errorf("failed to remove build scratch directory %q: %w", anchorDir, err))
 		}
 	}()
+
+	contextDirectory, err := extractTarFile(anchorDir, r)
+	if err != nil {
+		utils.InternalServerError(w, err)
+		return
+	}
 
 	query := struct {
 		AddHosts                string   `schema:"extrahosts"`
@@ -242,9 +249,9 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		containerFiles = []string{filepath.Join(contextDirectory, "Dockerfile")}
 		if utils.IsLibpodRequest(r) {
 			containerFiles = []string{filepath.Join(contextDirectory, "Containerfile")}
-			if _, err = os.Stat(containerFiles[0]); err != nil {
+			if err = fileutils.Exists(containerFiles[0]); err != nil {
 				containerFiles = []string{filepath.Join(contextDirectory, "Dockerfile")}
-				if _, err1 := os.Stat(containerFiles[0]); err1 != nil {
+				if err1 := fileutils.Exists(containerFiles[0]); err1 != nil {
 					utils.BadRequest(w, "dockerfile", query.Dockerfile, err)
 					return
 				}
@@ -377,10 +384,19 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// make sure to force rootless as rootless otherwise buildah runs code which is intended to be run only as root.
-		if isolation == buildah.IsolationOCI && rootless.IsRootless() {
-			isolation = buildah.IsolationOCIRootless
+		// Make sure to force rootless as rootless otherwise buildah runs code which is intended to be run only as root.
+		// Same the other way around: https://github.com/containers/podman/issues/22109
+		switch isolation {
+		case buildah.IsolationOCI:
+			if rootless.IsRootless() {
+				isolation = buildah.IsolationOCIRootless
+			}
+		case buildah.IsolationOCIRootless:
+			if !rootless.IsRootless() {
+				isolation = buildah.IsolationOCI
+			}
 		}
+
 		registry = ""
 		format = query.OutputFormat
 	} else {
@@ -722,7 +738,12 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		UnsetLabels:                    query.UnsetLabels,
 	}
 
-	for _, platformSpec := range query.Platform {
+	platforms := query.Platform
+	if len(platforms) == 1 {
+		// Docker API uses comma sperated platform arg so match this here
+		platforms = strings.Split(query.Platform[0], ",")
+	}
+	for _, platformSpec := range platforms {
 		os, arch, variant, err := parse.Platform(platformSpec)
 		if err != nil {
 			utils.BadRequest(w, "platform", platformSpec, err)
@@ -884,33 +905,13 @@ func parseLibPodIsolation(isolation string) (buildah.Isolation, error) {
 	return parse.IsolationOption(isolation)
 }
 
-func extractTarFile(r *http.Request) (string, error) {
-	// build a home for the request body
-	anchorDir, err := os.MkdirTemp("", "libpod_builder")
-	if err != nil {
-		return "", err
-	}
-
-	path := filepath.Join(anchorDir, "tarBall")
-	tarBall, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return "", err
-	}
-	defer tarBall.Close()
-
-	// Content-Length not used as too many existing API clients didn't honor it
-	_, err = io.Copy(tarBall, r.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed Request: Unable to copy tar file from request body %s", r.RequestURI)
-	}
-
+func extractTarFile(anchorDir string, r *http.Request) (string, error) {
 	buildDir := filepath.Join(anchorDir, "build")
-	err = os.Mkdir(buildDir, 0o700)
+	err := os.Mkdir(buildDir, 0o700)
 	if err != nil {
 		return "", err
 	}
 
-	_, _ = tarBall.Seek(0, 0)
-	err = archive.Untar(tarBall, buildDir, nil)
+	err = archive.Untar(r.Body, buildDir, nil)
 	return buildDir, err
 }

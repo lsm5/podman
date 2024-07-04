@@ -12,7 +12,6 @@ import (
 	"github.com/containers/storage"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/onsi/gomega/gexec"
 )
 
 func createContainersConfFileWithCustomUserns(pTest *PodmanTestIntegration, userns string) {
@@ -371,13 +370,11 @@ var _ = Describe("Podman UserNS support", func() {
 	It("podman --userns= conflicts with ui[dg]map and sub[ug]idname", func() {
 		session := podmanTest.Podman([]string{"run", "--userns=host", "--uidmap=0:1:500", "alpine", "true"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
-		Expect(session.ErrorToString()).To(ContainSubstring("--userns and --uidmap/--gidmap/--subuidname/--subgidname are mutually exclusive"))
+		Expect(session).Should(ExitWithError(125, "--userns and --uidmap/--gidmap/--subuidname/--subgidname are mutually exclusive"))
 
 		session = podmanTest.Podman([]string{"run", "--userns=host", "--gidmap=0:200:5000", "alpine", "true"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
-		Expect(session.ErrorToString()).To(ContainSubstring("--userns and --uidmap/--gidmap/--subuidname/--subgidname are mutually exclusive"))
+		Expect(session).Should(ExitWithError(125, "--userns and --uidmap/--gidmap/--subuidname/--subgidname are mutually exclusive"))
 
 		// with sub[ug]idname we don't check for the error output since the error message could be different, depending on the
 		// system configuration since the specified user could not be defined and cause a different earlier error.
@@ -421,5 +418,42 @@ var _ = Describe("Podman UserNS support", func() {
 		if IsRemote() {
 			podmanTest.RestartRemoteService()
 		}
+	})
+
+	It("podman pod userns inherited for containers", func() {
+		podName := "testPod"
+		podIDFile := filepath.Join(podmanTest.TempDir, "podid")
+		podCreate := podmanTest.Podman([]string{"pod", "create", "--pod-id-file", podIDFile, "--uidmap", "0:0:1000", "--name", podName})
+		podCreate.WaitWithDefaultTimeout()
+		Expect(podCreate).Should(ExitCleanly())
+
+		// The containers should not use PODMAN_USERNS as they must inherited the userns from the pod.
+		os.Setenv("PODMAN_USERNS", "keep-id")
+		defer os.Unsetenv("PODMAN_USERNS")
+
+		expectedMapping := `         0          0       1000
+         0          0       1000
+`
+		// rootless mapping is split in two ranges
+		if isRootless() {
+			expectedMapping = `         0          0          1
+         1          1        999
+         0          0          1
+         1          1        999
+`
+		}
+
+		session := podmanTest.Podman([]string{"run", "--pod", podName, ALPINE, "cat", "/proc/self/uid_map", "/proc/self/gid_map"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		output := string(session.Out.Contents())
+		Expect(output).To(Equal(expectedMapping))
+
+		// https://github.com/containers/podman/issues/22931
+		session = podmanTest.Podman([]string{"run", "--pod-id-file", podIDFile, ALPINE, "cat", "/proc/self/uid_map", "/proc/self/gid_map"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		output = string(session.Out.Contents())
+		Expect(output).To(Equal(expectedMapping))
 	})
 })

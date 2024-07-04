@@ -51,7 +51,6 @@ func GetInfo(w http.ResponseWriter, r *http.Request) {
 
 	// FIXME: Need to expose if runtime supports Checkpointing
 	// liveRestoreEnabled := criu.CheckForCriu() && configInfo.RuntimeSupportsCheckpoint()
-
 	info := &handlers.Info{
 		Info: dockerSystem.Info{
 			Architecture:       goRuntime.GOARCH,
@@ -193,6 +192,9 @@ func getSecOpts(sysInfo *sysinfo.SysInfo) []string {
 func getRuntimes(configInfo *config.Config) map[string]dockerSystem.RuntimeWithStatus {
 	runtimes := map[string]dockerSystem.RuntimeWithStatus{}
 	for name, paths := range configInfo.Engine.OCIRuntimes {
+		if len(paths) == 0 {
+			continue
+		}
 		runtime := dockerSystem.RuntimeWithStatus{}
 		runtime.Runtime = dockerSystem.Runtime{Path: paths[0], Args: nil}
 		runtimes[name] = runtime

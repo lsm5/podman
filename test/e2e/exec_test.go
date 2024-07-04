@@ -17,13 +17,7 @@ var _ = Describe("Podman exec", func() {
 	It("podman exec into bogus container", func() {
 		session := podmanTest.Podman([]string{"exec", "foobar", "ls"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
-	})
-
-	It("podman exec without command", func() {
-		session := podmanTest.Podman([]string{"exec", "foobar"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
+		Expect(session).Should(ExitWithError(125, `no container with name or ID "foobar" found: no such container`))
 	})
 
 	It("podman exec simple command", func() {
@@ -34,6 +28,11 @@ var _ = Describe("Podman exec", func() {
 		session := podmanTest.Podman([]string{"exec", "test1", "ls"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
+
+		// With no command
+		session = podmanTest.Podman([]string{"exec", "test1"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitWithError(125, "must provide a non-empty command to start an exec session: invalid argument"))
 	})
 
 	It("podman container exec simple command", func() {
@@ -96,7 +95,7 @@ var _ = Describe("Podman exec", func() {
 
 		session := podmanTest.Podman([]string{"exec", "test1", "sh", "-c", "exit 100"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(100))
+		Expect(session).Should(ExitWithError(100, ""))
 	})
 
 	It("podman exec in keep-id container drops privileges", func() {
@@ -399,13 +398,17 @@ var _ = Describe("Podman exec", func() {
 		setup.WaitWithDefaultTimeout()
 		Expect(setup).Should(ExitCleanly())
 
+		expect := "chdir to `/missing`: No such file or directory"
+		if podmanTest.OCIRuntime == "runc" {
+			expect = "chdir to cwd"
+		}
 		session := podmanTest.Podman([]string{"exec", "--workdir", "/missing", "test1", "pwd"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).To(ExitWithError())
+		Expect(session).To(ExitWithError(127, expect))
 
 		session = podmanTest.Podman([]string{"exec", "-w", "/missing", "test1", "pwd"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).To(ExitWithError())
+		Expect(session).To(ExitWithError(127, expect))
 	})
 
 	It("podman exec cannot be invoked", func() {
@@ -416,13 +419,19 @@ var _ = Describe("Podman exec", func() {
 		session := podmanTest.Podman([]string{"exec", "test1", "/etc"})
 		session.WaitWithDefaultTimeout()
 
+		// crun (and, we hope, any other future runtimes)
+		expectedStatus := 126
+		expectedMessage := "open executable: Operation not permitted: OCI permission denied"
+
+		// ...but it's much more complicated under runc (#19552)
 		if podmanTest.OCIRuntime == "runc" {
-			// #19552 and others: some versions of runc exit 255.
-			Expect(session).Should(ExitWithError())
-		} else {
-			// crun (and, we hope, any other future runtimes)
-			Expect(session).Should(Exit(126))
+			expectedMessage = `exec failed: unable to start container process: exec: "/etc": is a directory`
+			expectedStatus = 255
+			if IsRemote() {
+				expectedStatus = 125
+			}
 		}
+		Expect(session).Should(ExitWithError(expectedStatus, expectedMessage))
 	})
 
 	It("podman exec command not found", func() {
@@ -432,7 +441,7 @@ var _ = Describe("Podman exec", func() {
 
 		session := podmanTest.Podman([]string{"exec", "test1", "notthere"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(127))
+		Expect(session).Should(ExitWithError(127, "OCI runtime attempted to invoke a command that was not found"))
 	})
 
 	It("podman exec preserve fds sanity check", func() {
@@ -559,8 +568,7 @@ RUN useradd -u 1000 auser`, fedoraMinimal)
 		SkipIfRemote("not supported for --wait")
 		session := podmanTest.Podman([]string{"exec", "--wait", "2", "1234"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
-		Expect(session.ErrorToString()).To(Equal("Error: timed out waiting for container: 1234"))
+		Expect(session).Should(ExitWithError(125, "timed out waiting for container: 1234"))
 	})
 
 	It("podman exec --wait 5 seconds for started container", func() {

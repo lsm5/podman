@@ -4,6 +4,7 @@ package wutil
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/containers/storage/pkg/fileutils"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
@@ -42,7 +44,7 @@ func FindWSL() string {
 		locs = append(locs, filepath.Join(root, "System32", "wsl.exe"))
 
 		for _, loc := range locs {
-			if _, err := os.Stat(loc); err == nil {
+			if err := fileutils.Exists(loc); err == nil {
 				wslPath = loc
 				return
 			}
@@ -73,7 +75,10 @@ func SilentExec(command string, args ...string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("command %s %v failed: %w", command, args, err)
+	}
+	return nil
 }
 
 func SilentExecCmd(command string, args ...string) *exec.Cmd {

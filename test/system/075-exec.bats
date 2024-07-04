@@ -33,6 +33,9 @@ load helpers
     run_podman 127 exec $cid /no/such/command
     is "$output" ".*such file or dir"   "podman exec /no/such/command"
 
+    run_podman 125 exec $cid
+    is "$output" ".*must provide a non-empty command to start an exec session"   "podman exec must include a command"
+
     # Done. Tell the container to stop.
     # The '-d' is because container exit is racy: the exec process itself
     # could get caught and killed by cleanup, causing this step to exit 137
@@ -133,20 +136,6 @@ load helpers
     run_podman rm -t 0 -f $cid
 }
 
-@test "podman exec --wait" {
-    skip_if_remote "test is meaningless over remote"
-
-    # wait on bogus container
-    run_podman 125 exec --wait 5 "bogus_container" echo hello
-    assert "$output" = "Error: timed out waiting for container: bogus_container"
-
-    run_podman create --name "wait_container" $IMAGE top
-    run_podman 255 exec --wait 5 "wait_container" echo hello
-    assert "$output" = "Error: can only create exec sessions on running containers: container state improper"
-
-    run_podman rm -f wait_container
-}
-
 @test "podman run umask" {
     umask="0724"
     run_podman run --rm -q $IMAGE grep Umask /proc/self/status
@@ -228,6 +217,8 @@ load helpers
 
     run_podman inspect --format "{{len .ExecIDs}}" $cid
     assert "$output" = "0" ".ExecIDs must be empty"
+
+    run_podman rm -f -t0 $cid
 }
 
 # 'exec --preserve-fd' passes a list of additional file descriptors into the container
@@ -250,6 +241,8 @@ load helpers
     assert "${lines[0]}" !~ [123][0-9] "/proc/self/fd must not contain 10-39"
     assert "${lines[1]}" = "fd9"       "cat from fd 9"
     assert "${lines[2]}" = "$content"  "cat from fd 40"
+
+    run_podman rm -f -t0 $cid
 }
 
 # vim: filetype=sh

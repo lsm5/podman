@@ -3,57 +3,73 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gexec"
 	"github.com/onsi/gomega/types"
 )
 
-type ExitMatcher struct {
-	types.GomegaMatcher
-	Expected int
-	Actual   int
+type podmanSession interface {
+	ExitCode() int
+	ErrorToString() string
 }
 
-// ExitWithError matches when assertion is > argument.  Default 0
+type ExitMatcher struct {
+	types.GomegaMatcher
+	ExpectedExitCode int
+	ExitCode         int
+	ExpectedStderr   string
+	msg              string
+}
+
+// ExitWithError checks both exit code and stderr, fails if either does not match
 // Modeled after the gomega Exit() matcher and also operates on sessions.
-func ExitWithError(optionalExitCode ...int) *ExitMatcher {
-	exitCode := 0
-	if len(optionalExitCode) > 0 {
-		exitCode = optionalExitCode[0]
-	}
-	return &ExitMatcher{Expected: exitCode}
+func ExitWithError(expectExitCode int, expectStderr string) *ExitMatcher {
+	return &ExitMatcher{ExpectedExitCode: expectExitCode, ExpectedStderr: expectStderr}
 }
 
 // Match follows gexec.Matcher interface.
 func (matcher *ExitMatcher) Match(actual interface{}) (success bool, err error) {
-	exiter, ok := actual.(gexec.Exiter)
+	session, ok := actual.(podmanSession)
 	if !ok {
 		return false, fmt.Errorf("ExitWithError must be passed a gexec.Exiter (Missing method ExitCode() int) Got:\n#{format.Object(actual, 1)}")
 	}
 
-	matcher.Actual = exiter.ExitCode()
-	if matcher.Actual == -1 {
+	matcher.ExitCode = session.ExitCode()
+	if matcher.ExitCode == -1 {
+		matcher.msg = "Expected process to exit. It did not."
 		return false, nil
 	}
-	return matcher.Actual > matcher.Expected, nil
+
+	// Check exit code first. If it's not what we want, there's no point
+	// in checking error substrings
+	if matcher.ExitCode != matcher.ExpectedExitCode {
+		matcher.msg = fmt.Sprintf("Command exited with status %d (expected %d)", matcher.ExitCode, matcher.ExpectedExitCode)
+		return false, nil
+	}
+
+	if matcher.ExpectedStderr != "" {
+		if !strings.Contains(session.ErrorToString(), matcher.ExpectedStderr) {
+			matcher.msg = fmt.Sprintf("Command exited %d as expected, but did not emit '%s'", matcher.ExitCode, matcher.ExpectedStderr)
+			return false, nil
+		}
+	} else {
+		if session.ErrorToString() != "" {
+			matcher.msg = "Command exited with expected exit status, but emitted unwanted stderr"
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 func (matcher *ExitMatcher) FailureMessage(_ interface{}) (message string) {
-	if matcher.Actual == -1 {
-		return "Expected process to exit.  It did not."
-	}
-	return format.Message(matcher.Actual, "to be greater than exit code: ", matcher.Expected)
+	return matcher.msg
 }
 
 func (matcher *ExitMatcher) NegatedFailureMessage(_ interface{}) (message string) {
-	switch {
-	case matcher.Actual == -1:
-		return "you really shouldn't be able to see this!"
-	case matcher.Expected == -1:
-		return "Expected process not to exit.  It did."
-	}
-	return format.Message(matcher.Actual, "is less than or equal to exit code: ", matcher.Expected)
+	panic("There is no conceivable reason to call Not(ExitWithError) !")
 }
 
 func (matcher *ExitMatcher) MatchMayChangeInTheFuture(actual interface{}) bool {
@@ -71,11 +87,6 @@ func ExitCleanly() types.GomegaMatcher {
 
 type exitCleanlyMatcher struct {
 	msg string
-}
-
-type podmanSession interface {
-	ExitCode() int
-	ErrorToString() string
 }
 
 func (matcher *exitCleanlyMatcher) Match(actual interface{}) (success bool, err error) {

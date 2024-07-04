@@ -77,7 +77,7 @@ A little configuration by an administrator is required before rootless Podman ca
 [Podman Desktop](https://podman-desktop.io/) provides a local development environment for Podman and Kubernetes on Linux, Windows, and Mac machines.
 It is a full-featured desktop UI frontend for Podman which uses the `podman machine` backend on non-Linux operating systems to run containers.
 It supports full container lifecycle management (building, pulling, and pushing images, creating and managing containers, creating and managing pods, and working with Kubernetes YAML).
-The project develops on [GitHub](https://github.com/containers/podman-desktop) and contributors are welcome.
+The project develops on [GitHub](https://github.com/containers/podman-desktop) and contributions are welcome.
 
 ## Out of scope
 
@@ -113,6 +113,9 @@ Documentation on the Podman REST API.
 **[Podman Commands](https://podman.readthedocs.io/en/latest/Commands.html)**
 A list of the Podman commands with links to their man pages and in many cases videos
 showing the commands in use.
+
+**[Podman Container Images](https://github.com/containers/image_build/blob/main/podman/README.md)**
+Information on the Podman Container Images found on [quay.io](https://quay.io/podman/stable).
 
 **[Podman Troubleshooting Guide](troubleshooting.md)**
 A list of common issues and solutions for Podman.

@@ -250,7 +250,7 @@ func (r *Runtime) LookupImage(name string, options *LookupImageOptions) (*Image,
 	// off and entirely ignored.  The digest is the sole source of truth.
 	normalizedName, possiblyUnqualifiedNamedReference, err := normalizeTaggedDigestedString(name)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf(`parsing reference %q: %w`, name, err)
 	}
 	name = normalizedName
 
@@ -690,7 +690,7 @@ func (r *Runtime) RemoveImages(ctx context.Context, names []string, options *Rem
 	}
 
 	if options.ExternalContainers && options.IsExternalContainerFunc == nil {
-		return nil, []error{fmt.Errorf("libimage error: cannot remove external containers without callback")}
+		return nil, []error{errors.New("libimage error: cannot remove external containers without callback")}
 	}
 
 	// The logic here may require some explanation.  Image removal is

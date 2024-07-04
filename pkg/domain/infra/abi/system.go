@@ -15,6 +15,7 @@ import (
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/directory"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -51,7 +52,7 @@ func (ic *ContainerEngine) Info(ctx context.Context) (*define.Info, error) {
 	}
 
 	if uri.Scheme == "unix" {
-		_, err := os.Stat(uri.Path)
+		err := fileutils.Exists(uri.Path)
 		info.Host.RemoteSocket.Exists = err == nil
 	} else {
 		info.Host.RemoteSocket.Exists = true
@@ -334,5 +335,13 @@ func (ic ContainerEngine) Locks(ctx context.Context) (*entities.LocksReport, err
 	}
 	report.LockConflicts = conflicts
 	report.LocksHeld = held
+	return &report, nil
+}
+
+func (ic ContainerEngine) SystemCheck(ctx context.Context, options entities.SystemCheckOptions) (*entities.SystemCheckReport, error) {
+	report, err := ic.Libpod.SystemCheck(ctx, options)
+	if err != nil {
+		return nil, err
+	}
 	return &report, nil
 }

@@ -10,16 +10,16 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/containers/podman/v5/pkg/machine/shim/diskpull"
-
 	"github.com/Microsoft/go-winio"
 	"github.com/containers/common/pkg/strongunits"
 	gvproxy "github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/libhvee/pkg/hypervctl"
 	"github.com/containers/podman/v5/pkg/machine"
 	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/podman/v5/pkg/machine/env"
 	"github.com/containers/podman/v5/pkg/machine/hyperv/vsock"
 	"github.com/containers/podman/v5/pkg/machine/ignition"
+	"github.com/containers/podman/v5/pkg/machine/shim/diskpull"
 	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
 	"github.com/containers/podman/v5/pkg/systemd/parser"
 	"github.com/sirupsen/logrus"
@@ -45,15 +45,15 @@ func (h HyperVStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineC
 	var (
 		err error
 	)
-	callbackFuncs := machine.InitCleanup()
+	callbackFuncs := machine.CleanUp()
 	defer callbackFuncs.CleanIfErr(&err)
 	go callbackFuncs.CleanOnSignal()
 
 	hwConfig := hypervctl.HardwareConfig{
 		CPUs:     uint16(mc.Resources.CPUs),
 		DiskPath: mc.ImagePath.GetPath(),
-		DiskSize: mc.Resources.DiskSize,
-		Memory:   mc.Resources.Memory,
+		DiskSize: uint64(mc.Resources.DiskSize),
+		Memory:   uint64(mc.Resources.Memory),
 	}
 
 	networkHVSock, err := vsock.NewHVSockRegistryEntry(mc.Name, vsock.Network)
@@ -119,7 +119,7 @@ func (h HyperVStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineC
 	}
 
 	callbackFuncs.Add(vmRemoveCallback)
-	err = resizeDisk(strongunits.GiB(mc.Resources.DiskSize), mc.ImagePath)
+	err = resizeDisk(mc.Resources.DiskSize, mc.ImagePath)
 	return err
 }
 
@@ -138,9 +138,6 @@ func (h HyperVStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, quiet bool)
 }
 
 func (h HyperVStubber) Remove(mc *vmconfigs.MachineConfig) ([]string, func() error, error) {
-	mc.Lock()
-	defer mc.Unlock()
-
 	_, vm, err := GetVMFromMC(mc)
 	if err != nil {
 		return nil, nil, err
@@ -182,7 +179,7 @@ func (h HyperVStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func(
 		return nil, nil, err
 	}
 
-	callbackFuncs := machine.InitCleanup()
+	callbackFuncs := machine.CleanUp()
 	defer callbackFuncs.CleanIfErr(&err)
 	go callbackFuncs.CleanOnSignal()
 
@@ -215,8 +212,15 @@ func (h HyperVStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func(
 		callbackFuncs.Add(rmIgnCallbackFunc)
 	}
 
+	waitReady, listener, err := mc.HyperVHypervisor.ReadyVsock.ListenSetupWait()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	err = vm.Start()
 	if err != nil {
+		// cleanup the pending listener
+		_ = listener.Close()
 		return nil, nil, err
 	}
 
@@ -225,7 +229,7 @@ func (h HyperVStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func(
 	}
 	callbackFuncs.Add(startCallback)
 
-	return nil, mc.HyperVHypervisor.ReadyVsock.Listen, err
+	return nil, waitReady, err
 }
 
 // State is returns the state as a define.status.  for hyperv, state differs from others because
@@ -240,9 +244,6 @@ func (h HyperVStubber) State(mc *vmconfigs.MachineConfig, bypass bool) (define.S
 }
 
 func (h HyperVStubber) StopVM(mc *vmconfigs.MachineConfig, hardStop bool) error {
-	mc.Lock()
-	defer mc.Unlock()
-
 	vmm := hypervctl.NewVirtualMachineManager()
 	vm, err := vmm.GetMachine(mc.Name)
 	if err != nil {
@@ -300,9 +301,6 @@ func (h HyperVStubber) SetProviderAttrs(mc *vmconfigs.MachineConfig, opts define
 		cpuChanged, memoryChanged bool
 	)
 
-	mc.Lock()
-	defer mc.Unlock()
-
 	_, vm, err := GetVMFromMC(mc)
 	if err != nil {
 		return err
@@ -338,9 +336,10 @@ func (h HyperVStubber) SetProviderAttrs(mc *vmconfigs.MachineConfig, opts define
 		}, func(ms *hypervctl.MemorySettings) {
 			if memoryChanged {
 				ms.DynamicMemoryEnabled = false
-				ms.VirtualQuantity = *opts.Memory
-				ms.Limit = *opts.Memory
-				ms.Reservation = *opts.Memory
+				mem := uint64(*opts.Memory)
+				ms.VirtualQuantity = mem
+				ms.Limit = mem
+				ms.Reservation = mem
 			}
 		})
 		if err != nil {
@@ -377,71 +376,79 @@ func (h HyperVStubber) PostStartNetworking(mc *vmconfigs.MachineConfig, noInfo b
 		err        error
 		executable string
 	)
-	callbackFuncs := machine.InitCleanup()
+	callbackFuncs := machine.CleanUp()
 	defer callbackFuncs.CleanIfErr(&err)
 	go callbackFuncs.CleanOnSignal()
 
-	if len(mc.Mounts) != 0 {
-		var (
-			dirs       *define.MachineDirs
-			gvproxyPID int
-		)
-		dirs, err = machine.GetMachineDirs(h.VMType())
-		if err != nil {
-			return err
-		}
-		// GvProxy PID file path is now derived
-		gvproxyPIDFile, err := dirs.RuntimeDir.AppendToNewVMFile("gvproxy.pid", nil)
-		if err != nil {
-			return err
-		}
-		gvproxyPID, err = gvproxyPIDFile.ReadPIDFrom()
-		if err != nil {
-			return err
-		}
-
-		executable, err = os.Executable()
-		if err != nil {
-			return err
-		}
-		// Start the 9p server in the background
-		p9ServerArgs := []string{}
-		if logrus.IsLevelEnabled(logrus.DebugLevel) {
-			p9ServerArgs = append(p9ServerArgs, "--log-level=debug")
-		}
-		p9ServerArgs = append(p9ServerArgs, "machine", "server9p")
-
-		for _, mount := range mc.Mounts {
-			if mount.VSockNumber == nil {
-				return fmt.Errorf("mount %s has not vsock port defined", mount.Source)
-			}
-			p9ServerArgs = append(p9ServerArgs, "--serve", fmt.Sprintf("%s:%s", mount.Source, winio.VsockServiceID(uint32(*mount.VSockNumber)).String()))
-		}
-		p9ServerArgs = append(p9ServerArgs, fmt.Sprintf("%d", gvproxyPID))
-
-		logrus.Debugf("Going to start 9p server using command: %s %v", executable, p9ServerArgs)
-
-		fsCmd := exec.Command(executable, p9ServerArgs...)
-
-		if logrus.IsLevelEnabled(logrus.DebugLevel) {
-			err = logCommandToFile(fsCmd, "podman-machine-server9.log")
-			if err != nil {
-				return err
-			}
-		}
-
-		err = fsCmd.Start()
-		if err == nil {
-			logrus.Infof("Started podman 9p server as PID %d", fsCmd.Process.Pid)
-		}
-
-		// Note: No callback is needed to stop the 9p server, because it will stop when
-		// gvproxy stops
-
-		// Finalize starting shares after we are confident gvproxy is still alive.
-		err = startShares(mc)
+	if len(mc.Mounts) == 0 {
+		return nil
 	}
+
+	var (
+		dirs       *define.MachineDirs
+		gvproxyPID int
+	)
+	dirs, err = env.GetMachineDirs(h.VMType())
+	if err != nil {
+		return err
+	}
+	// GvProxy PID file path is now derived
+	gvproxyPIDFile, err := dirs.RuntimeDir.AppendToNewVMFile("gvproxy.pid", nil)
+	if err != nil {
+		return err
+	}
+	gvproxyPID, err = gvproxyPIDFile.ReadPIDFrom()
+	if err != nil {
+		return err
+	}
+
+	executable, err = os.Executable()
+	if err != nil {
+		return err
+	}
+	// Start the 9p server in the background
+	p9ServerArgs := []string{}
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		p9ServerArgs = append(p9ServerArgs, "--log-level=debug")
+	}
+	p9ServerArgs = append(p9ServerArgs, "machine", "server9p")
+
+	for _, mount := range mc.Mounts {
+		if mount.VSockNumber == nil {
+			return fmt.Errorf("mount %s has no vsock port defined", mount.Source)
+		}
+		p9ServerArgs = append(p9ServerArgs, "--serve", fmt.Sprintf("%s:%s", mount.Source, winio.VsockServiceID(uint32(*mount.VSockNumber)).String()))
+	}
+	p9ServerArgs = append(p9ServerArgs, fmt.Sprintf("%d", gvproxyPID))
+
+	logrus.Debugf("Going to start 9p server using command: %s %v", executable, p9ServerArgs)
+
+	fsCmd := exec.Command(executable, p9ServerArgs...)
+
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		err = logCommandToFile(fsCmd, "podman-machine-server9.log")
+		if err != nil {
+			return err
+		}
+	}
+
+	err = fsCmd.Start()
+	if err != nil {
+		return fmt.Errorf("unable to start 9p server: %v", err)
+	}
+	logrus.Infof("Started podman 9p server as PID %d", fsCmd.Process.Pid)
+
+	// Note: No callback is needed to stop the 9p server, because it will stop when
+	// gvproxy stops
+
+	// Finalize starting shares after we are confident gvproxy is still alive.
+	err = startShares(mc)
 	return err
+}
+
+func (h HyperVStubber) UpdateSSHPort(mc *vmconfigs.MachineConfig, port int) error {
+	// managed by gvproxy on this backend, so nothing to do
+	return nil
 }
 
 func (h HyperVStubber) GetDisk(userInputPath string, dirs *define.MachineDirs, mc *vmconfigs.MachineConfig) error {
@@ -489,12 +496,15 @@ func readAndSplitIgnition(mc *vmconfigs.MachineConfig, vm *hypervctl.VirtualMach
 }
 
 func removeIgnitionFromRegistry(vm *hypervctl.VirtualMachine) error {
-	pairs, err := vm.GetKeyValuePairs()
-	if err != nil {
-		return err
-	}
-	for key := range pairs {
-		if err := vm.RemoveKeyValuePair(key); err != nil {
+	// because the vm is down at this point, we cannot query hyperv for these key value pairs.
+	// therefore we blindly iterate from 0-50 and delete the key/value pairs. hyperv does not
+	// raise an error if the key is not present
+	//
+	for i := 0; i < 50; i++ {
+		// this is a well known "key" defined in libhvee and is the vm name
+		// plus an index starting at 0
+		key := fmt.Sprintf("%s%d", vm.ElementName, i)
+		if err := vm.RemoveKeyValuePairNoWait(key); err != nil {
 			return err
 		}
 	}
@@ -502,7 +512,7 @@ func removeIgnitionFromRegistry(vm *hypervctl.VirtualMachine) error {
 }
 
 func logCommandToFile(c *exec.Cmd, filename string) error {
-	dir, err := machine.GetDataDir(define.HyperVVirt)
+	dir, err := env.GetDataDir(define.HyperVVirt)
 	if err != nil {
 		return fmt.Errorf("obtain machine dir: %w", err)
 	}
@@ -546,4 +556,8 @@ func createNetworkUnit(netPort uint64) (string, error) {
 	netUnit.Add("Service", "ExecStartPost", "/usr/bin/nmcli c up vsock0")
 	netUnit.Add("Install", "WantedBy", "multi-user.target")
 	return netUnit.ToString()
+}
+
+func (h HyperVStubber) GetRosetta(mc *vmconfigs.MachineConfig) (bool, error) {
+	return false, nil
 }

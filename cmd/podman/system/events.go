@@ -49,6 +49,56 @@ var (
 	noTrunc      bool
 )
 
+type Event struct {
+	// containerExitCode is for storing the exit code of a container which can
+	// be used for "internal" event notification
+	ContainerExitCode *int `json:",omitempty"`
+	// ID can be for the container, image, volume, etc
+	ID string `json:",omitempty"`
+	// Image used where applicable
+	Image string `json:",omitempty"`
+	// Name where applicable
+	Name string `json:",omitempty"`
+	// Network is the network name in a network event
+	Network string `json:"network,omitempty"`
+	// Status describes the event that occurred
+	Status events.Status
+	// Time the event occurred
+	Time int64 `json:"time,omitempty"`
+	// timeNano the event occurred in nanoseconds
+	TimeNano int64 `json:"timeNano,omitempty"`
+	// Type of event that occurred
+	Type events.Type
+	// Health status of the current container
+	HealthStatus string `json:"health_status,omitempty"`
+	// Error code for certain events involving errors.
+	Error string `json:",omitempty"`
+
+	events.Details
+}
+
+func newEventFromLibpodEvent(e *events.Event) Event {
+	return Event{
+		ContainerExitCode: e.ContainerExitCode,
+		ID:                e.ID,
+		Image:             e.Image,
+		Name:              e.Name,
+		Network:           e.Network,
+		Status:            e.Status,
+		Time:              e.Time.Unix(),
+		Type:              e.Type,
+		HealthStatus:      e.HealthStatus,
+		Details:           e.Details,
+		TimeNano:          e.Time.UnixNano(),
+		Error:             e.Error,
+	}
+}
+
+func (e *Event) ToJSONString() (string, error) {
+	b, err := json.Marshal(e)
+	return string(b), err
+}
+
 func init() {
 	registry.Commands = append(registry.Commands, registry.CliCommand{
 		Command: systemEventsCommand,
@@ -70,7 +120,7 @@ func eventsFlags(cmd *cobra.Command) {
 
 	formatFlagName := "format"
 	flags.StringVar(&eventFormat, formatFlagName, "", "format the output using a Go template")
-	_ = cmd.RegisterFlagCompletionFunc(formatFlagName, common.AutocompleteFormat(&events.Event{}))
+	_ = cmd.RegisterFlagCompletionFunc(formatFlagName, common.AutocompleteFormat(&Event{}))
 
 	flags.BoolVar(&eventOptions.Stream, "stream", true, "stream events and do not exit when returning the last known event")
 
@@ -112,8 +162,7 @@ func eventsCmd(cmd *cobra.Command, _ []string) error {
 	}
 
 	go func() {
-		err := registry.ContainerEngine().Events(context.Background(), eventOptions)
-		errChannel <- err
+		errChannel <- registry.ContainerEngine().Events(context.Background(), eventOptions)
 	}()
 
 	for {
@@ -121,17 +170,25 @@ func eventsCmd(cmd *cobra.Command, _ []string) error {
 		case event, ok := <-eventChannel:
 			if !ok {
 				// channel was closed we can exit
+				select {
+				case err := <-errChannel:
+					if err != nil {
+						return err
+					}
+				default:
+				}
 				return nil
 			}
 			switch {
 			case doJSON:
-				jsonStr, err := event.ToJSONString()
+				e := newEventFromLibpodEvent(event)
+				jsonStr, err := e.ToJSONString()
 				if err != nil {
 					return err
 				}
 				fmt.Println(jsonStr)
 			case cmd.Flags().Changed("format"):
-				if err := rpt.Execute(event); err != nil {
+				if err := rpt.Execute(newEventFromLibpodEvent(event)); err != nil {
 					return err
 				}
 			default:

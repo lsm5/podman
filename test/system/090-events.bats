@@ -4,43 +4,37 @@
 #
 
 load helpers
+load helpers.network
 
 # bats test_tags=distro-integration
-@test "events with a filter by label" {
+@test "events with a filter by label and --no-trunc option" {
     cname=test-$(random_string 30 | tr A-Z a-z)
     labelname=$(random_string 10)
     labelvalue=$(random_string 15)
 
-    run_podman run --label $labelname=$labelvalue --name $cname --rm $IMAGE ls
+    before=$(date --iso-8601=seconds)
+    run_podman run -d --label $labelname=$labelvalue --name $cname --rm $IMAGE true
+    id="$output"
 
-    expect=".* container start [0-9a-f]\+ (image=$IMAGE, name=$cname,.* ${labelname}=${labelvalue}"
-    run_podman events --filter type=container -f container=$cname --filter label=${labelname}=${labelvalue} --filter event=start --stream=false
+    expect=".* container start $id (image=$IMAGE, name=$cname,.* ${labelname}=${labelvalue}"
+    run_podman events --since "$before"  --filter type=container -f container=$cname --filter label=${labelname}=${labelvalue} --filter event=start --stream=false
     is "$output" "$expect" "filtering by container name and label"
 
     # Same thing, but without the container-name filter
-    run_podman system events -f type=container --filter label=${labelname}=${labelvalue} --filter event=start --stream=false
+    run_podman system events --since "$before" -f type=container --filter label=${labelname}=${labelvalue} --filter event=start --stream=false
     is "$output" "$expect" "filtering just by label"
 
     # Now filter just by container name, no label
-    run_podman events --filter type=container --filter container=$cname --filter event=start --stream=false
+    run_podman events --since "$before" --filter type=container --filter container=$cname --filter event=start --stream=false
     is "$output" "$expect" "filtering just by container"
-}
 
-@test "truncate events" {
-    cname=test-$(random_string 30 | tr A-Z a-z)
-
-    run_podman run -d --name=$cname --rm $IMAGE echo hi
-    id="$output"
-
-    run_podman events --filter container=$cname --filter event=start --stream=false
-    is "$output" ".* $id " "filtering by container name full id"
-
+    # check --no-trunc=false
     truncID=${id:0:12}
-    run_podman events --filter container=$cname --filter event=start --stream=false --no-trunc=false
+    run_podman events --since "$before" --filter container=$cname --filter event=start --stream=false --no-trunc=false
     is "$output" ".* $truncID " "filtering by container name trunc id"
 
     # --no-trunc does not affect --format; we always get the full ID
-    run_podman events --filter container=$cname --filter event=died --stream=false --format='{{.ID}}--{{.Image}}' --no-trunc=false
+    run_podman events --since "$before" --filter container=$cname --filter event=died --stream=false --format='{{.ID}}--{{.Image}}' --no-trunc=false
     assert "$output" = "${id}--${IMAGE}"
 }
 
@@ -57,12 +51,15 @@ load helpers
     t0=$(date --iso-8601=seconds)
     tag=registry.com/$(random_string 10 | tr A-Z a-z)
 
+    bogus_image="localhost:$(random_free_port)/bogus"
+
     # Force using the file backend since the journal backend is eating events
     # (see containers/podman/pull/10219#issuecomment-842325032).
     run_podman --events-backend=file push $IMAGE dir:$pushedDir
     run_podman --events-backend=file save $IMAGE -o $tarball
     run_podman --events-backend=file load -i $tarball
     run_podman --events-backend=file pull docker-archive:$tarball
+    run_podman 125 --events-backend=file pull --retry 0 $bogus_image
     run_podman --events-backend=file tag $IMAGE $tag
     run_podman --events-backend=file untag $IMAGE $tag
     run_podman --events-backend=file tag $IMAGE $tag
@@ -74,6 +71,7 @@ load helpers
 .*image save $imageID $tarball
 .*image loadfromarchive $imageID $tarball
 .*image pull $imageID docker-archive:$tarball
+.*image pull-error  $bogus_image .*pinging container registry localhost.*connection refused
 .*image tag $imageID $tag
 .*image untag $imageID $tag:latest
 .*image tag $imageID $tag
@@ -87,6 +85,7 @@ load helpers
                      "save--$tarball"
                      "loadfromarchive--$tarball"
                      "pull--docker-archive:$tarball"
+                     "pull-error--$bogus_image"
                      "tag--$tag"
                      "untag--$tag:latest"
                      "tag--$tag"
@@ -135,7 +134,7 @@ function _events_disjunctive_filters() {
     run_podman 125 --events-backend=file logs --follow test
     is "$output" "Error: using --follow with the journald --log-driver but without the journald --events-backend (file) is not supported" \
        "Should fail with reasonable error message when events-backend and events-logger do not match"
-
+    run_podman rm test
 }
 
 @test "events with disjunctive filters - default" {
@@ -223,9 +222,9 @@ EOF
     # same amount of events.  We checked the contents before.
     CONTAINERS_CONF_OVERRIDE=$containersConf run_podman events --stream=false --since="2022-03-06T11:26:42.723667984+02:00" --format=json
     assert "${#lines[@]}" = 52 "Number of events returned"
-    is "${lines[0]}" "{\"Name\":\"$eventsFile\",\"Status\":\"log-rotation\",\"Time\":\".*\",\"Type\":\"system\",\"Attributes\":{\"io.podman.event.rotate\":\"begin\"}}"
-    is "${lines[-2]}" "{\"Name\":\"$eventsFile\",\"Status\":\"log-rotation\",\"Time\":\".*\",\"Type\":\"system\",\"Attributes\":{\"io.podman.event.rotate\":\"end\"}}"
-    is "${lines[-1]}" "{\"ID\":\"$ctrID\",\"Image\":\"$IMAGE\",\"Name\":\".*\",\"Status\":\"remove\",\"Time\":\".*\",\"Type\":\"container\",\"Attributes\":{.*}}"
+    is "${lines[0]}" "{\"Name\":\"$eventsFile\",\"Status\":\"log-rotation\",\"time\":[0-9]\+,\"timeNano\":[0-9]\+,\"Type\":\"system\",\"Attributes\":{\"io.podman.event.rotate\":\"begin\"}}"
+    is "${lines[-2]}" "{\"Name\":\"$eventsFile\",\"Status\":\"log-rotation\",\"time\":[0-9]\+,\"timeNano\":[0-9]\+,\"Type\":\"system\",\"Attributes\":{\"io.podman.event.rotate\":\"end\"}}"
+    is "${lines[-1]}" "{\"ID\":\"$ctrID\",\"Image\":\"$IMAGE\",\"Name\":\".*\",\"Status\":\"remove\",\"time\":[0-9]\+,\"timeNano\":[0-9]\+,\"Type\":\"container\",\"Attributes\":{.*}}"
 }
 
 @test "events log-file no duplicates" {
@@ -292,10 +291,10 @@ EOF
     # Make sure that the JSON stream looks as expected. That means it has all
     # events and no duplicates.
     run cat $eventsJSON
-    is "${lines[0]}" "{\"Name\":\"busybox\",\"Status\":\"pull\",\"Time\":\"2022-04-06T11:26:42.7236679+02:00\",\"Type\":\"image\",\"Attributes\":null}"
-    is "${lines[99]}" "{\"Name\":\"busybox\",\"Status\":\"pull\",\"Time\":\"2022-04-06T11:26:42.723667999+02:00\",\"Type\":\"image\",\"Attributes\":null}"
-    is "${lines[100]}" "{\"Name\":\"$eventsFile\",\"Status\":\"log-rotation\",\"Time\":\".*\",\"Type\":\"system\",\"Attributes\":{\"io.podman.event.rotate\":\"end\"}}"
-    is "${lines[103]}" "{\"ID\":\"$ctrID\",\"Image\":\"$IMAGE\",\"Name\":\".*\",\"Status\":\"remove\",\"Time\":\".*\",\"Type\":\"container\",\"Attributes\":{.*}}"
+    is "${lines[0]}" "{\"Name\":\"busybox\",\"Status\":\"pull\",\"time\":1649237202,\"timeNano\":1649237202723[0-9]\+,\"Type\":\"image\",\"Attributes\":null}"
+    is "${lines[99]}" "{\"Name\":\"busybox\",\"Status\":\"pull\",\"time\":1649237202,\"timeNano\":1649237202723[0-9]\+,\"Type\":\"image\",\"Attributes\":null}"
+    is "${lines[100]}" "{\"Name\":\"$eventsFile\",\"Status\":\"log-rotation\",\"time\":[0-9]\+,\"timeNano\":[0-9]\+,\"Type\":\"system\",\"Attributes\":{\"io.podman.event.rotate\":\"end\"}}"
+    is "${lines[103]}" "{\"ID\":\"$ctrID\",\"Image\":\"$IMAGE\",\"Name\":\".*\",\"Status\":\"remove\",\"time\":[0-9]\+,\"timeNano\":[0-9]\+,\"Type\":\"container\",\"Attributes\":{.*}}"
 }
 
 # Prior to #15633, container labels would not appear in 'die' log events
@@ -359,6 +358,8 @@ EOF
         --stream=false
     assert "$output" != ".*ConmonPidFile.*"
     assert "$output" != ".*EffectiveCaps.*"
+
+    run_podman rm $cname
 }
 
 @test "events - container inspect data - journald" {
@@ -399,4 +400,9 @@ EOF
     # Prefix test
     run_podman events --since=1m --stream=false --filter volume=${vname:0:5}
     assert "$output" = "$notrunc_results"
+}
+
+@test "events - invalid filter" {
+    run_podman 125 events --since="the dawn of time...ish"
+    assert "$output" =~ "failed to parse event filters"
 }

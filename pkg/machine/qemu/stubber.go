@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build linux || freebsd
 
 package qemu
 
@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +31,15 @@ type QEMUStubber struct {
 	vmconfigs.QEMUConfig
 	// Command describes the final QEMU command line
 	Command command.QemuCmd
+
+	// virtiofsHelpers are virtiofsd child processes
+	virtiofsHelpers []virtiofsdHelperCmd
 }
+
+var (
+	gvProxyWaitBackoff        = 500 * time.Millisecond
+	gvProxyMaxBackoffAttempts = 6
+)
 
 func (q QEMUStubber) UserModeNetworkEnabled(*vmconfigs.MachineConfig) bool {
 	return true
@@ -70,15 +77,14 @@ func (q *QEMUStubber) setQEMUCommandLine(mc *vmconfigs.MachineConfig) error {
 	q.Command.SetCPUs(mc.Resources.CPUs)
 	q.Command.SetIgnitionFile(*ignitionFile)
 	q.Command.SetQmpMonitor(mc.QEMUHypervisor.QMPMonitor)
-	q.Command.SetNetwork()
-	q.Command.SetSerialPort(*readySocket, *mc.QEMUHypervisor.QEMUPidPath, mc.Name)
-
-	// Add volumes to qemu command line
-	for _, mount := range mc.Mounts {
-		// the index provided in this case is thrown away
-		_, _, _, _, securityModel := vmconfigs.SplitVolume(0, mount.OriginalInput)
-		q.Command.SetVirtfsMount(mount.Source, mount.Tag, securityModel, mount.ReadOnly)
+	gvProxySock, err := mc.GVProxySocket()
+	if err != nil {
+		return err
 	}
+	if err := q.Command.SetNetwork(gvProxySock); err != nil {
+		return err
+	}
+	q.Command.SetSerialPort(*readySocket, *mc.QEMUHypervisor.QEMUPidPath, mc.Name)
 
 	q.Command.SetUSBHostPassthrough(mc.Resources.USBs)
 
@@ -106,7 +112,7 @@ func (q *QEMUStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineCo
 
 	mc.QEMUHypervisor = &qemuConfig
 	mc.QEMUHypervisor.QEMUPidPath = qemuPidPath
-	return q.resizeDisk(strongunits.GiB(mc.Resources.DiskSize), mc.ImagePath)
+	return q.resizeDisk(mc.Resources.DiskSize, mc.ImagePath)
 }
 
 func runStartVMCommand(cmd *exec.Cmd) error {
@@ -136,9 +142,6 @@ func (q *QEMUStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func()
 		return nil, nil, fmt.Errorf("unable to generate qemu command line: %q", err)
 	}
 
-	defaultBackoff := 500 * time.Millisecond
-	maxBackoffs := 6
-
 	readySocket, err := mc.ReadySocket()
 	if err != nil {
 		return nil, nil, err
@@ -149,17 +152,10 @@ func (q *QEMUStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func()
 		return nil, nil, err
 	}
 
-	qemuNetdevSockConn, err := sockets.DialSocketWithBackoffs(maxBackoffs, defaultBackoff, gvProxySock.GetPath())
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to gvproxy socket: %w", err)
-	}
-	defer qemuNetdevSockConn.Close()
-
-	fd, err := qemuNetdevSockConn.(*net.UnixConn).File()
-	if err != nil {
+	// Wait on gvproxy to be running and aware
+	if err := sockets.WaitForSocketWithBackoffs(gvProxyMaxBackoffAttempts, gvProxyWaitBackoff, gvProxySock.GetPath(), "gvproxy"); err != nil {
 		return nil, nil, err
 	}
-	defer fd.Close()
 
 	dnr, dnw, err := machine.GetDevNullFiles()
 	if err != nil {
@@ -168,9 +164,25 @@ func (q *QEMUStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func()
 	defer dnr.Close()
 	defer dnw.Close()
 
-	cmdLine := q.Command
+	runtime, err := mc.RuntimeDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	spawner, err := newVirtiofsdSpawner(runtime)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	cmdLine.SetPropagatedHostEnvs()
+	for _, hostmnt := range mc.Mounts {
+		qemuArgs, virtiofsdHelper, err := spawner.spawnForMount(hostmnt)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to init virtiofsd for mount %s: %w", hostmnt.Source, err)
+		}
+		q.Command = append(q.Command, qemuArgs...)
+		q.virtiofsHelpers = append(q.virtiofsHelpers, *virtiofsdHelper)
+	}
+
+	cmdLine := q.Command
 
 	// Disable graphic window when not in debug mode
 	// Done in start, so we're not suck with the debug level we used on init
@@ -184,12 +196,11 @@ func (q *QEMUStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func()
 
 	// actually run the command that starts the virtual machine
 	cmd := &exec.Cmd{
-		Args:       cmdLine,
-		Path:       cmdLine[0],
-		Stdin:      dnr,
-		Stdout:     dnw,
-		Stderr:     stderrBuf,
-		ExtraFiles: []*os.File{fd},
+		Args:   cmdLine,
+		Path:   cmdLine[0],
+		Stdin:  dnr,
+		Stdout: dnw,
+		Stderr: stderrBuf,
 	}
 
 	if err := runStartVMCommand(cmd); err != nil {
@@ -201,8 +212,20 @@ func (q *QEMUStubber) StartVM(mc *vmconfigs.MachineConfig) (func() error, func()
 		return waitForReady(readySocket, cmd.Process.Pid, stderrBuf)
 	}
 
+	releaseFunc := func() error {
+		if err := cmd.Process.Release(); err != nil {
+			return err
+		}
+		for _, virtiofsdCmd := range q.virtiofsHelpers {
+			if err := virtiofsdCmd.command.Process.Release(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	// if this is not the last line in the func, make it a defer
-	return cmd.Process.Release, readyFunc, nil
+	return releaseFunc, readyFunc, nil
 }
 
 func waitForReady(readySocket *define.VMFile, pid int, stdErrBuffer *bytes.Buffer) error {
@@ -255,9 +278,6 @@ func (q *QEMUStubber) resizeDisk(newSize strongunits.GiB, diskPath *define.VMFil
 }
 
 func (q *QEMUStubber) SetProviderAttrs(mc *vmconfigs.MachineConfig, opts define.SetOptions) error {
-	mc.Lock()
-	defer mc.Unlock()
-
 	state, err := q.State(mc, false)
 	if err != nil {
 		return err
@@ -319,7 +339,7 @@ func (q *QEMUStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, quiet bool) 
 		// create mountpoint directory if it doesn't exist
 		// because / is immutable, we have to monkey around with permissions
 		// if we dont mount in /home or /mnt
-		args := []string{"-q", "--"}
+		var args []string
 		if !strings.HasPrefix(mount.Target, "/home") && !strings.HasPrefix(mount.Target, "/mnt") {
 			args = append(args, "sudo", "chattr", "-i", "/", ";")
 		}
@@ -331,33 +351,42 @@ func (q *QEMUStubber) MountVolumesToVM(mc *vmconfigs.MachineConfig, quiet bool) 
 		if err != nil {
 			return err
 		}
-		switch mount.Type {
-		case MountType9p:
-			mountOptions := []string{"-t", "9p"}
-			mountOptions = append(mountOptions, []string{"-o", "trans=virtio", mount.Tag, mount.Target}...)
-			mountOptions = append(mountOptions, []string{"-o", "version=9p2000.L,msize=131072,cache=mmap"}...)
-			if mount.ReadOnly {
-				mountOptions = append(mountOptions, []string{"-o", "ro"}...)
-			}
-			err = machine.CommonSSH(mc.SSH.RemoteUsername, mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, append([]string{"-q", "--", "sudo", "mount"}, mountOptions...))
-			if err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unknown mount type: %s", mount.Type)
+		// NOTE: The mount type q.Type was previously serialized as 9p for older Linux versions,
+		// but we ignore it now because we want the mount type to be dynamic, not static.  Or
+		// in other words we don't want to make people unnecessarily reprovision their machines
+		// to upgrade from 9p to virtiofs.
+		mountOptions := []string{"-t", "virtiofs"}
+		mountOptions = append(mountOptions, []string{mount.Tag, mount.Target}...)
+		mountFlags := fmt.Sprintf("context=\"%s\"", machine.NFSSELinuxContext)
+		if mount.ReadOnly {
+			mountFlags += ",ro"
+		}
+		mountOptions = append(mountOptions, "-o", mountFlags)
+		err = machine.CommonSSH(mc.SSH.RemoteUsername, mc.SSH.IdentityPath, mc.Name, mc.SSH.Port, append([]string{"sudo", "mount"}, mountOptions...))
+		if err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func (q *QEMUStubber) MountType() vmconfigs.VolumeMountType {
-	return vmconfigs.NineP
+	return vmconfigs.VirtIOFS
 }
 
 func (q *QEMUStubber) PostStartNetworking(mc *vmconfigs.MachineConfig, noInfo bool) error {
 	return nil
 }
 
+func (q *QEMUStubber) UpdateSSHPort(mc *vmconfigs.MachineConfig, port int) error {
+	// managed by gvproxy on this backend, so nothing to do
+	return nil
+}
+
 func (q *QEMUStubber) GetDisk(userInputPath string, dirs *define.MachineDirs, mc *vmconfigs.MachineConfig) error {
 	return diskpull.GetDisk(userInputPath, dirs, mc.ImagePath, q.VMType(), mc.Name)
+}
+
+func (q *QEMUStubber) GetRosetta(mc *vmconfigs.MachineConfig) (bool, error) {
+	return false, nil
 }

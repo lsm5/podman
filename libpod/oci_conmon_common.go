@@ -183,23 +183,11 @@ func hasCurrentUserMapped(ctr *Container) bool {
 
 // CreateContainer creates a container.
 func (r *ConmonOCIRuntime) CreateContainer(ctr *Container, restoreOptions *ContainerCheckpointOptions) (int64, error) {
-	// always make the run dir accessible to the current user so that the PID files can be read without
-	// being in the rootless user namespace.
-	if err := makeAccessible(ctr.state.RunDir, 0, 0); err != nil {
-		return 0, err
-	}
 	if !hasCurrentUserMapped(ctr) {
-		for _, i := range []string{ctr.state.RunDir, ctr.runtime.config.Engine.TmpDir, ctr.config.StaticDir, ctr.state.Mountpoint, ctr.runtime.config.Engine.VolumePath} {
-			if err := makeAccessible(i, ctr.RootUID(), ctr.RootGID()); err != nil {
-				return 0, err
-			}
-		}
-
 		// if we are running a non privileged container, be sure to umount some kernel paths so they are not
 		// bind mounted inside the container at all.
-		if !ctr.config.Privileged && !rootless.IsRootless() {
-			return r.createRootlessContainer(ctr, restoreOptions)
-		}
+		hideFiles := !ctr.config.Privileged && !rootless.IsRootless()
+		return r.createRootlessContainer(ctr, restoreOptions, hideFiles)
 	}
 	return r.createOCIContainer(ctr, restoreOptions)
 }
@@ -232,29 +220,31 @@ func (r *ConmonOCIRuntime) UpdateContainerStatus(ctr *Container) error {
 		return fmt.Errorf("getting stderr pipe: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
-		out, err2 := io.ReadAll(errPipe)
-		if err2 != nil {
-			return fmt.Errorf("getting container %s state: %w", ctr.ID(), err)
-		}
-		if strings.Contains(string(out), "does not exist") || strings.Contains(string(out), "No such file") {
-			if err := ctr.removeConmonFiles(); err != nil {
-				logrus.Debugf("unable to remove conmon files for container %s", ctr.ID())
-			}
-			ctr.state.ExitCode = -1
-			ctr.state.FinishedTime = time.Now()
-			ctr.state.State = define.ContainerStateExited
-			return ctr.runtime.state.AddContainerExitCode(ctr.ID(), ctr.state.ExitCode)
-		}
-		return fmt.Errorf("getting container %s state. stderr/out: %s: %w", ctr.ID(), out, err)
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("error launching container runtime: %w", err)
 	}
 	defer func() {
 		_ = cmd.Wait()
 	}()
 
+	stderr, err := io.ReadAll(errPipe)
+	if err != nil {
+		return fmt.Errorf("reading stderr: %s: %w", ctr.ID(), err)
+	}
+	if strings.Contains(string(stderr), "does not exist") || strings.Contains(string(stderr), "No such file") {
+		if err := ctr.removeConmonFiles(); err != nil {
+			logrus.Debugf("unable to remove conmon files for container %s", ctr.ID())
+		}
+		ctr.state.ExitCode = -1
+		ctr.state.FinishedTime = time.Now()
+		ctr.state.State = define.ContainerStateExited
+		return ctr.runtime.state.AddContainerExitCode(ctr.ID(), ctr.state.ExitCode)
+	}
 	if err := errPipe.Close(); err != nil {
 		return err
 	}
+
 	out, err := io.ReadAll(outPipe)
 	if err != nil {
 		return fmt.Errorf("reading stdout: %s: %w", ctr.ID(), err)
@@ -340,6 +330,7 @@ func generateResourceFile(res *spec.LinuxResources) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	defer f.Close()
 
 	j, err := json.Marshal(res)
 	if err != nil {
@@ -976,28 +967,6 @@ func (r *ConmonOCIRuntime) RuntimeInfo() (*define.ConmonInfo, *define.OCIRuntime
 	return &conmon, &ocirt, nil
 }
 
-// makeAccessible changes the path permission and each parent directory to have --x--x--x
-func makeAccessible(path string, uid, gid int) error {
-	for ; path != "/"; path = filepath.Dir(path) {
-		st, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if int(st.Sys().(*syscall.Stat_t).Uid) == uid && int(st.Sys().(*syscall.Stat_t).Gid) == gid {
-			continue
-		}
-		if st.Mode()&0111 != 0111 {
-			if err := os.Chmod(path, st.Mode()|0111); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // Wait for a container which has been sent a signal to stop
 func waitContainerStop(ctr *Container, timeout time.Duration) error {
 	return waitPidStop(ctr.state.PID, timeout)
@@ -1417,7 +1386,7 @@ func (r *ConmonOCIRuntime) sharedConmonArgs(ctr *Container, cuuid, bundlePath, p
 		logDriverArg = define.JournaldLogging
 	case define.NoLogging:
 		logDriverArg = define.NoLogging
-	case define.PassthroughLogging:
+	case define.PassthroughLogging, define.PassthroughTTYLogging:
 		logDriverArg = define.PassthroughLogging
 	//lint:ignore ST1015 the default case has to be here
 	default: //nolint:gocritic

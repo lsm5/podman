@@ -160,8 +160,11 @@ const (
 	// the k8s behavior of waiting for the intialDelaySeconds to be over before updating the status
 	KubeHealthCheckAnnotation = "io.podman.annotations.kube.health.check"
 
-	// MaxKubeAnnotation is the max length of annotations allowed by Kubernetes.
-	MaxKubeAnnotation = 63
+	// KubeImageAutomountAnnotation
+	KubeImageAutomountAnnotation = "io.podman.annotations.kube.image.volumes.mount"
+
+	// TotalAnnotationSizeLimitB is the max length of annotations allowed by Kubernetes.
+	TotalAnnotationSizeLimitB int = 256 * (1 << 10) // 256 kB
 )
 
 // IsReservedAnnotation returns true if the specified value corresponds to an

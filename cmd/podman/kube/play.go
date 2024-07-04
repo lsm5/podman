@@ -22,6 +22,7 @@ import (
 	"github.com/containers/podman/v5/cmd/podman/utils"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/libpod/shutdown"
+	"github.com/containers/podman/v5/pkg/annotations"
 	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/errorhandling"
 	"github.com/containers/podman/v5/pkg/util"
@@ -133,7 +134,7 @@ func playFlags(cmd *cobra.Command) {
 	_ = cmd.RegisterFlagCompletionFunc(logOptFlagName, common.AutocompleteLogOpt)
 
 	usernsFlagName := "userns"
-	flags.StringVar(&playOptions.Userns, usernsFlagName, os.Getenv("PODMAN_USERNS"),
+	flags.StringVar(&playOptions.Userns, usernsFlagName, "",
 		"User namespace to use",
 	)
 	_ = cmd.RegisterFlagCompletionFunc(usernsFlagName, common.AutocompleteUserNamespace)
@@ -171,6 +172,7 @@ func playFlags(cmd *cobra.Command) {
 
 	noTruncFlagName := "no-trunc"
 	flags.BoolVar(&playOptions.UseLongAnnotations, noTruncFlagName, false, "Use annotations that are not truncated to the Kubernetes maximum length of 63 characters")
+	_ = flags.MarkHidden(noTruncFlagName)
 
 	if !registry.IsRemote() {
 		certDirFlagName := "cert-dir"
@@ -253,10 +255,11 @@ func play(cmd *cobra.Command, args []string) error {
 		if playOptions.Annotations == nil {
 			playOptions.Annotations = make(map[string]string)
 		}
-		if len(val) > define.MaxKubeAnnotation && !playOptions.UseLongAnnotations {
-			return fmt.Errorf("annotation exceeds maximum size, %d, of kubernetes annotation: %s", define.MaxKubeAnnotation, val)
-		}
 		playOptions.Annotations[key] = val
+	}
+
+	if err := annotations.ValidateAnnotations(playOptions.Annotations); err != nil {
+		return err
 	}
 
 	for _, mac := range playOptions.macs {

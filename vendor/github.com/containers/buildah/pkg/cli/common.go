@@ -128,6 +128,7 @@ type FromAndBudResults struct {
 	BlobCache      string
 	CapAdd         []string
 	CapDrop        []string
+	CDIConfigDir   string
 	CgroupParent   string
 	CPUPeriod      uint64
 	CPUQuota       int64
@@ -367,7 +368,7 @@ func GetFromAndBudFlags(flags *FromAndBudResults, usernsResults *UserNSResults, 
 	fs := pflag.FlagSet{}
 	defaultContainerConfig, err := config.Default()
 	if err != nil {
-		return fs, fmt.Errorf("failed to get container config: %w", err)
+		return fs, fmt.Errorf("failed to get default container config: %w", err)
 	}
 
 	fs.StringSliceVar(&flags.AddHost, "add-host", []string{}, "add a custom host-to-IP mapping (`host:ip`) (default [])")
@@ -377,6 +378,8 @@ func GetFromAndBudFlags(flags *FromAndBudResults, usernsResults *UserNSResults, 
 	}
 	fs.StringSliceVar(&flags.CapAdd, "cap-add", []string{}, "add the specified capability when running (default [])")
 	fs.StringSliceVar(&flags.CapDrop, "cap-drop", []string{}, "drop the specified capability when running (default [])")
+	fs.StringVar(&flags.CDIConfigDir, "cdi-config-dir", "", "`directory` of CDI configuration files")
+	_ = fs.MarkHidden("cdi-config-dir")
 	fs.StringVar(&flags.CgroupParent, "cgroup-parent", "", "optional parent cgroup for the container")
 	fs.Uint64Var(&flags.CPUPeriod, "cpu-period", 0, "limit the CPU CFS (Completely Fair Scheduler) period")
 	fs.Int64Var(&flags.CPUQuota, "cpu-quota", 0, "limit the CPU CFS (Completely Fair Scheduler) quota")
@@ -384,7 +387,7 @@ func GetFromAndBudFlags(flags *FromAndBudResults, usernsResults *UserNSResults, 
 	fs.StringVar(&flags.CPUSetCPUs, "cpuset-cpus", "", "CPUs in which to allow execution (0-3, 0,1)")
 	fs.StringVar(&flags.CPUSetMems, "cpuset-mems", "", "memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems.")
 	fs.StringSliceVar(&flags.DecryptionKeys, "decryption-key", nil, "key needed to decrypt the image")
-	fs.StringArrayVar(&flags.Devices, "device", defaultContainerConfig.Containers.Devices.Get(), "additional devices to be used within containers (default [])")
+	fs.StringArrayVar(&flags.Devices, "device", defaultContainerConfig.Containers.Devices.Get(), "additional devices to provide")
 	fs.StringSliceVar(&flags.DNSSearch, "dns-search", defaultContainerConfig.Containers.DNSSearches.Get(), "set custom DNS search domains")
 	fs.StringSliceVar(&flags.DNSServers, "dns", defaultContainerConfig.Containers.DNSServers.Get(), "set custom DNS servers or disable it completely by setting it to 'none', which prevents the automatic creation of `/etc/resolv.conf`.")
 	fs.StringSliceVar(&flags.DNSOptions, "dns-option", defaultContainerConfig.Containers.DNSOptions.Get(), "set custom DNS options")
@@ -392,8 +395,8 @@ func GetFromAndBudFlags(flags *FromAndBudResults, usernsResults *UserNSResults, 
 	fs.StringVar(&flags.Isolation, "isolation", DefaultIsolation(), "`type` of process isolation to use. Use BUILDAH_ISOLATION environment variable to override.")
 	fs.StringVarP(&flags.Memory, "memory", "m", "", "memory limit (format: <number>[<unit>], where unit = b, k, m or g)")
 	fs.StringVar(&flags.MemorySwap, "memory-swap", "", "swap limit equal to memory plus swap: '-1' to enable unlimited swap")
-	fs.IntVar(&flags.Retry, "retry", MaxPullPushRetries, "number of times to retry in case of failure when performing push/pull")
-	fs.StringVar(&flags.RetryDelay, "retry-delay", PullPushRetryDelay.String(), "delay between retries in case of push/pull failures")
+	fs.IntVar(&flags.Retry, "retry", int(defaultContainerConfig.Engine.Retry), "number of times to retry in case of failure when performing push/pull")
+	fs.StringVar(&flags.RetryDelay, "retry-delay", defaultContainerConfig.Engine.RetryDelay, "delay between retries in case of push/pull failures")
 	fs.String("arch", runtime.GOARCH, "set the ARCH of the image to the provided value instead of the architecture of the host")
 	fs.String("os", runtime.GOOS, "prefer `OS` instead of the running OS when pulling images")
 	fs.StringSlice("platform", []string{parse.DefaultPlatform()}, "set the `OS/ARCH[/VARIANT]` of the image to the provided value instead of the current operating system and architecture of the host (for example \"linux/arm\")")

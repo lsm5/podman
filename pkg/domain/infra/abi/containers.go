@@ -995,7 +995,10 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 				return reports, fmt.Errorf("unable to start container %s: %w", ctr.ID(), err)
 			}
 
-			exitCode = ic.GetContainerExitCode(ctx, ctr.Container)
+			exitCode, err2 := ic.ContainerWaitForExitCode(ctx, ctr.Container)
+			if err2 != nil {
+				logrus.Errorf("Waiting for container %s: %v", ctr.ID(), err2)
+			}
 			reports = append(reports, &entities.ContainerStartReport{
 				Id:       ctr.ID(),
 				RawInput: ctr.rawInput,
@@ -1189,7 +1192,7 @@ func (ic *ContainerEngine) ContainerRun(ctx context.Context, opts entities.Conta
 		report.ExitCode = define.ExitCode(err)
 		return &report, err
 	}
-	report.ExitCode = ic.GetContainerExitCode(ctx, ctr)
+	report.ExitCode, _ = ic.ContainerWaitForExitCode(ctx, ctr)
 	if opts.Rm && !ctr.ShouldRestart(ctx) {
 		if err := removeContainer(ctr, false); err != nil {
 			if errors.Is(err, define.ErrNoSuchCtr) ||
@@ -1203,14 +1206,13 @@ func (ic *ContainerEngine) ContainerRun(ctx context.Context, opts entities.Conta
 	return &report, nil
 }
 
-func (ic *ContainerEngine) GetContainerExitCode(ctx context.Context, ctr *libpod.Container) int {
+func (ic *ContainerEngine) ContainerWaitForExitCode(ctx context.Context, ctr *libpod.Container) (int, error) {
 	exitCode, err := ctr.Wait(ctx)
 	if err != nil {
-		logrus.Errorf("Waiting for container %s: %v", ctr.ID(), err)
 		intExitCode := int(define.ExecErrorCodeNotFound)
-		return intExitCode
+		return intExitCode, err
 	}
-	return int(exitCode)
+	return int(exitCode), nil
 }
 
 func (ic *ContainerEngine) ContainerLogs(ctx context.Context, namesOrIds []string, options entities.ContainerLogsOptions) error {
@@ -1569,12 +1571,7 @@ func (ic *ContainerEngine) ContainerStats(ctx context.Context, namesOrIds []stri
 
 	go func() {
 		defer close(statsChan)
-		var (
-			err            error
-			containers     []*libpod.Container
-			containerStats map[string]*define.ContainerStats
-		)
-		containerStats = make(map[string]*define.ContainerStats)
+		containerStats := make(map[string]*define.ContainerStats)
 
 	stream: // label to flatten the scope
 		select {
@@ -1588,7 +1585,7 @@ func (ic *ContainerEngine) ContainerStats(ctx context.Context, namesOrIds []stri
 
 		// Anonymous func to easily use the return values for streaming.
 		computeStats := func() ([]define.ContainerStats, error) {
-			containers, err = containerFunc()
+			containers, err := containerFunc()
 			if err != nil {
 				return nil, fmt.Errorf("unable to get list of containers: %w", err)
 			}
@@ -1767,7 +1764,12 @@ func (ic *ContainerEngine) ContainerUpdate(ctx context.Context, updateOptions *e
 		return "", fmt.Errorf("container not found")
 	}
 
-	if err = containers[0].Update(updateOptions.Specgen.ResourceLimits); err != nil {
+	var restartPolicy *string
+	if updateOptions.Specgen.RestartPolicy != "" {
+		restartPolicy = &updateOptions.Specgen.RestartPolicy
+	}
+
+	if err = containers[0].Update(updateOptions.Specgen.ResourceLimits, restartPolicy, updateOptions.Specgen.RestartRetries); err != nil {
 		return "", err
 	}
 	return containers[0].ID(), nil

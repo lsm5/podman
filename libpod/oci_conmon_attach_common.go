@@ -3,7 +3,6 @@
 package libpod
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -32,8 +31,9 @@ const (
 // Attach to the given container.
 // Does not check if state is appropriate.
 // started is only required if startContainer is true.
+// It does not wait for the container to be healthy, it is the caller responsibility to do so.
 func (r *ConmonOCIRuntime) Attach(c *Container, params *AttachOptions) error {
-	passthrough := c.LogDriver() == define.PassthroughLogging
+	passthrough := c.LogDriver() == define.PassthroughLogging || c.LogDriver() == define.PassthroughTTYLogging
 
 	if params == nil || params.Streams == nil {
 		return fmt.Errorf("must provide parameters to Attach: %w", define.ErrInternal)
@@ -86,7 +86,7 @@ func (r *ConmonOCIRuntime) Attach(c *Container, params *AttachOptions) error {
 	// If starting was requested, start the container and notify when that's
 	// done.
 	if params.Start {
-		if err := c.start(context.TODO()); err != nil {
+		if err := c.start(); err != nil {
 			return err
 		}
 		params.Started <- true

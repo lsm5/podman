@@ -71,36 +71,27 @@ export CI="${CI:-false}"
 CIRRUS_CI="${CIRRUS_CI:-false}"
 CONTINUOUS_INTEGRATION="${CONTINUOUS_INTEGRATION:-false}"
 CIRRUS_REPO_NAME=${CIRRUS_REPO_NAME:-podman}
-# Cirrus only sets $CIRRUS_BASE_SHA properly for PRs, but $EPOCH_TEST_COMMIT
-# needs to be set from this value in order for `make validate` to run properly.
-# When running get_ci_vm.sh, most $CIRRUS_xyz variables are empty. Attempt
-# to accommodate both branch and get_ci_vm.sh testing by discovering the base
-# branch SHA value.
-# shellcheck disable=SC2154
-if [[ -z "$CIRRUS_BASE_SHA" ]] && [[ -z "$CIRRUS_TAG" ]]
-then  # Operating on a branch, or under `get_ci_vm.sh`
-    showrun echo "branch or get_ci_vm (CIRRUS_BASE_SHA and CIRRUS_TAG are unset)"
-    CIRRUS_BASE_SHA=$(git rev-parse ${UPSTREAM_REMOTE:-origin}/$DEST_BRANCH)
-elif [[ -z "$CIRRUS_BASE_SHA" ]]
-then  # Operating on a tag
-    showrun echo "operating on tag"
-    CIRRUS_BASE_SHA=$(git rev-parse HEAD)
-fi
-# The starting place for linting and code validation
-EPOCH_TEST_COMMIT="$CIRRUS_BASE_SHA"
 
-# Regex defining all CI-related env. vars. necessary for all possible
-# testing operations on all platforms and versions.  This is necessary
-# to avoid needlessly passing through global/system values across
-# contexts, such as host->container or root->rootless user
+# shellcheck disable=SC2154
+if [[ -n "$CIRRUS_PR" ]] && [[ -z "$PR_BASE_SHA" ]]; then
+    # shellcheck disable=SC2154
+    PR_BASE_SHA=$(git merge-base ${DEST_BRANCH:-main} HEAD)
+    export PR_BASE_SHA
+fi
+
+# The next three values define regular expressions matching env. vars. necessary
+# for all possible testing contexts (rootless, container, etc.).  These values
+# are consumed by the passthrough_envars() automation library function.
 #
 # List of envariables which must be EXACT matches
-PASSTHROUGH_ENV_EXACT='CGROUP_MANAGER|DEST_BRANCH|DISTRO_NV|GOCACHE|GOPATH|GOSRC|NETWORK_BACKEND|OCI_RUNTIME|PODMAN_IGNORE_CGROUPSV1_WARNING|ROOTLESS_USER|SCRIPT_BASE|SKIP_USERNS|EC2_INST_TYPE|PODMAN_DB|STORAGE_FS'
+PASSTHROUGH_ENV_EXACT='CGROUP_MANAGER|DEST_BRANCH|DISTRO_NV|GOCACHE|GOPATH|GOSRC|NETWORK_BACKEND|OCI_RUNTIME|PR_BASE_SHA|ROOTLESS_USER|SCRIPT_BASE|SKIP_USERNS|EC2_INST_TYPE|PODMAN_DB|STORAGE_FS|PODMAN_BATS_LEAK_CHECK'
 
 # List of envariable patterns which must match AT THE BEGINNING of the name.
+# Consumed by the passthrough_envars() automation library function.
 PASSTHROUGH_ENV_ATSTART='CI|LANG|LC_|TEST'
 
-# List of envariable patterns which can match ANYWHERE in the name
+# List of envariable patterns which can match ANYWHERE in the name.
+# Consumed by the passthrough_envars() automation library function.
 PASSTHROUGH_ENV_ANYWHERE='_NAME|_FQIN'
 
 # Unsafe env. vars for display
@@ -158,6 +149,9 @@ setup_rootless() {
     msg "creating $rootless_uid:$rootless_gid $ROOTLESS_USER user"
     showrun groupadd -g $rootless_gid $ROOTLESS_USER
     showrun useradd -g $rootless_gid -u $rootless_uid --no-user-group --create-home $ROOTLESS_USER
+
+    # use tmpfs to speed up IO
+    mount -t tmpfs -o size=75%,mode=0700,uid=$rootless_uid,gid=$rootless_gid none /home/$ROOTLESS_USER
 
     echo "$ROOTLESS_USER ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/ci-rootless
 

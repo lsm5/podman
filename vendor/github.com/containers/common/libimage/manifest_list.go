@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/containers/common/libimage/define"
@@ -19,7 +20,7 @@ import (
 	structcopier "github.com/jinzhu/copier"
 	"github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"golang.org/x/exp/slices"
+	"golang.org/x/exp/maps"
 )
 
 // NOTE: the abstractions and APIs here are a first step to further merge
@@ -294,7 +295,7 @@ func (m *ManifestList) Inspect() (*define.ManifestListData, error) {
 	return &inspectList, nil
 }
 
-// Options for adding a manifest list.
+// Options for adding an image or artifact to a manifest list.
 type ManifestListAddOptions struct {
 	// Add all images to the list if the to-be-added image itself is a
 	// manifest list.
@@ -313,6 +314,29 @@ type ManifestListAddOptions struct {
 	Password string
 }
 
+func (m *ManifestList) parseNameToExtantReference(ctx context.Context, name string, manifestList bool, what string) (types.ImageReference, error) {
+	ref, err := alltransports.ParseImageName(name)
+	if err != nil {
+		withDocker := fmt.Sprintf("%s://%s", docker.Transport.Name(), name)
+		ref, err = alltransports.ParseImageName(withDocker)
+		if err == nil {
+			var src types.ImageSource
+			src, err = ref.NewImageSource(ctx, nil)
+			if err == nil {
+				src.Close()
+			}
+		}
+		if err != nil {
+			image, _, lookupErr := m.image.runtime.LookupImage(name, &LookupImageOptions{ManifestList: manifestList})
+			if lookupErr != nil {
+				return nil, fmt.Errorf("locating %s: %q: %w; %q: %w", what, withDocker, err, name, lookupErr)
+			}
+			ref, err = image.storageReference, nil
+		}
+	}
+	return ref, err
+}
+
 // Add adds one or more manifests to the manifest list and returns the digest
 // of the added instance.
 func (m *ManifestList) Add(ctx context.Context, name string, options *ManifestListAddOptions) (digest.Digest, error) {
@@ -320,13 +344,9 @@ func (m *ManifestList) Add(ctx context.Context, name string, options *ManifestLi
 		options = &ManifestListAddOptions{}
 	}
 
-	ref, err := alltransports.ParseImageName(name)
+	ref, err := m.parseNameToExtantReference(ctx, name, false, "image to add to manifest list")
 	if err != nil {
-		withDocker := fmt.Sprintf("%s://%s", docker.Transport.Name(), name)
-		ref, err = alltransports.ParseImageName(withDocker)
-		if err != nil {
-			return "", err
-		}
+		return "", err
 	}
 
 	// Now massage in the copy-related options into the system context.
@@ -371,6 +391,96 @@ func (m *ManifestList) Add(ctx context.Context, name string, options *ManifestLi
 	return newDigest, nil
 }
 
+// Options for creating an artifact manifest for one or more files and adding
+// the artifact manifest to a manifest list.
+type ManifestListAddArtifactOptions struct {
+	// The artifactType to set in the artifact manifest.
+	Type *string `json:"artifact_type"`
+	// The mediaType to set in the config.MediaType field in the artifact manifest.
+	ConfigType string `json:"artifact_config_type"`
+	// Content to point to from the config field in the artifact manifest.
+	Config string `json:"artifact_config"`
+	// The mediaType to set in the layer descriptors in the artifact manifest.
+	LayerType string `json:"artifact_layer_type"`
+	// Whether or not to suppress the org.opencontainers.image.title annotation in layer descriptors.
+	ExcludeTitles bool `json:"exclude_layer_titles"`
+	// Annotations to set in the artifact manifest.
+	Annotations map[string]string `json:"annotations"`
+	// Subject to set in the artifact manifest.
+	Subject string `json:"subject"`
+}
+
+// Add adds one or more manifests to the manifest list and returns the digest
+// of the added instance.
+func (m *ManifestList) AddArtifact(ctx context.Context, options *ManifestListAddArtifactOptions, files ...string) (digest.Digest, error) {
+	if options == nil {
+		options = &ManifestListAddArtifactOptions{}
+	}
+	opts := manifests.AddArtifactOptions{
+		ManifestArtifactType: options.Type,
+		Annotations:          maps.Clone(options.Annotations),
+		ExcludeTitles:        options.ExcludeTitles,
+	}
+	if options.ConfigType != "" {
+		opts.ConfigDescriptor = &imgspecv1.Descriptor{
+			MediaType: options.ConfigType,
+			Digest:    imgspecv1.DescriptorEmptyJSON.Digest,
+			Size:      imgspecv1.DescriptorEmptyJSON.Size,
+			Data:      slices.Clone(imgspecv1.DescriptorEmptyJSON.Data),
+		}
+	}
+	if options.Config != "" {
+		if opts.ConfigDescriptor == nil {
+			opts.ConfigDescriptor = &imgspecv1.Descriptor{
+				MediaType: imgspecv1.MediaTypeImageConfig,
+			}
+		}
+		opts.ConfigDescriptor.Digest = digest.FromString(options.Config)
+		opts.ConfigDescriptor.Size = int64(len(options.Config))
+		opts.ConfigDescriptor.Data = slices.Clone([]byte(options.Config))
+	}
+	if opts.ConfigDescriptor == nil {
+		empty := imgspecv1.DescriptorEmptyJSON
+		opts.ConfigDescriptor = &empty
+	}
+	if options.LayerType != "" {
+		opts.LayerMediaType = &options.LayerType
+	}
+	if options.Subject != "" {
+		ref, err := m.parseNameToExtantReference(ctx, options.Subject, true, "subject for artifact manifest")
+		if err != nil {
+			return "", err
+		}
+		opts.SubjectReference = ref
+	}
+
+	// Lock the image record where this list lives.
+	locker, err := manifests.LockerForImage(m.image.runtime.store, m.ID())
+	if err != nil {
+		return "", err
+	}
+	locker.Lock()
+	defer locker.Unlock()
+
+	systemContext := m.image.runtime.systemContextCopy()
+
+	// Make sure to reload the image from the containers storage to fetch
+	// the latest data (e.g., new or delete digests).
+	if err := m.reload(); err != nil {
+		return "", err
+	}
+	newDigest, err := m.list.AddArtifact(ctx, systemContext, opts, files...)
+	if err != nil {
+		return "", err
+	}
+
+	// Write the changes to disk.
+	if err := m.saveAndReload(); err != nil {
+		return "", err
+	}
+	return newDigest, nil
+}
+
 // Options for annotating a manifest list.
 type ManifestListAnnotateOptions struct {
 	// Add the specified annotations to the added image.
@@ -387,10 +497,16 @@ type ManifestListAnnotateOptions struct {
 	OSVersion string
 	// Add the specified variant to the added image.
 	Variant string
+	// Add the specified annotations to the index itself.
+	IndexAnnotations map[string]string
+	// Set the subject to which the index refers.
+	Subject string
 }
 
 // Annotate an image instance specified by `d` in the manifest list.
 func (m *ManifestList) AnnotateInstance(d digest.Digest, options *ManifestListAnnotateOptions) error {
+	ctx := context.Background()
+
 	if options == nil {
 		return nil
 	}
@@ -427,6 +543,46 @@ func (m *ManifestList) AnnotateInstance(d digest.Digest, options *ManifestListAn
 	}
 	if len(options.Annotations) > 0 {
 		if err := m.list.SetAnnotations(&d, options.Annotations); err != nil {
+			return err
+		}
+	}
+	if len(options.IndexAnnotations) > 0 {
+		if err := m.list.SetAnnotations(nil, options.IndexAnnotations); err != nil {
+			return err
+		}
+	}
+	if options.Subject != "" {
+		ref, err := m.parseNameToExtantReference(ctx, options.Subject, true, "subject for image index")
+		if err != nil {
+			return err
+		}
+		src, err := ref.NewImageSource(ctx, &m.image.runtime.systemContext)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+		subjectManifestBytes, subjectManifestType, err := src.GetManifest(ctx, nil)
+		if err != nil {
+			return err
+		}
+		subjectManifestDigest, err := manifest.Digest(subjectManifestBytes)
+		if err != nil {
+			return err
+		}
+		var subjectArtifactType string
+		if !manifest.MIMETypeIsMultiImage(subjectManifestType) {
+			var subjectManifest imgspecv1.Manifest
+			if json.Unmarshal(subjectManifestBytes, &subjectManifest) == nil {
+				subjectArtifactType = subjectManifest.ArtifactType
+			}
+		}
+		descriptor := &imgspecv1.Descriptor{
+			MediaType:    subjectManifestType,
+			ArtifactType: subjectArtifactType,
+			Digest:       subjectManifestDigest,
+			Size:         int64(len(subjectManifestBytes)),
+		}
+		if err := m.list.SetSubject(descriptor); err != nil {
 			return err
 		}
 	}

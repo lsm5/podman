@@ -7,6 +7,7 @@ package parse
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/containers/common/pkg/parse"
 	"github.com/containers/image/v5/docker/reference"
 	"github.com/containers/image/v5/types"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/containers/storage/pkg/unshare"
 	storageTypes "github.com/containers/storage/types"
@@ -252,14 +254,14 @@ func parseSecurityOpts(securityOpts []string, commonOpts *define.CommonBuildOpti
 	}
 
 	if commonOpts.SeccompProfilePath == "" {
-		if _, err := os.Stat(SeccompOverridePath); err == nil {
+		if err := fileutils.Exists(SeccompOverridePath); err == nil {
 			commonOpts.SeccompProfilePath = SeccompOverridePath
 		} else {
-			if !errors.Is(err, os.ErrNotExist) {
+			if !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
-			if _, err := os.Stat(SeccompDefaultPath); err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
+			if err := fileutils.Exists(SeccompDefaultPath); err != nil {
+				if !errors.Is(err, fs.ErrNotExist) {
 					return err
 				}
 			} else {
@@ -491,7 +493,9 @@ func PullPolicyFromFlagSet(flags *pflag.FlagSet, findFlagFunc func(name string) 
 	if err != nil {
 		return 0, err
 	}
-	if pullNeverFlagValue || strings.EqualFold(pullFlagValue, "never") {
+	if pullNeverFlagValue ||
+		strings.EqualFold(pullFlagValue, "never") ||
+		strings.EqualFold(pullFlagValue, "false") {
 		pullPolicy = define.PullNever
 	}
 	logrus.Debugf("Pull Policy for pull [%v]", pullPolicy)
@@ -814,8 +818,11 @@ func SBOMScanOptionsFromFlagSet(flags *pflag.FlagSet, findFlagFunc func(name str
 		return nil, fmt.Errorf("invalid value for --sbom-purl-output: %w", err)
 	}
 
-	if options.Image == "" || len(options.Commands) == 0 || (options.SBOMOutput == "" && options.ImageSBOMOutput == "" && options.PURLOutput == "" && options.ImagePURLOutput == "") {
-		return options, fmt.Errorf("sbom configuration missing one or more of (%q, %q, %q, %q, %q or %q)", "--sbom-scanner-imag", "--sbom-scanner-command", "--sbom-output", "--sbom-image-output", "--sbom-purl-output", "--sbom-image-purl-output")
+	if options.Image == "" || len(options.Commands) == 0 {
+		return options, fmt.Errorf("sbom configuration missing one or more of (%q or %q)", "--sbom-scanner-image", "--sbom-scanner-command")
+	}
+	if options.SBOMOutput == "" && options.ImageSBOMOutput == "" && options.PURLOutput == "" && options.ImagePURLOutput == "" {
+		return options, fmt.Errorf("sbom configuration missing one or more of (%q, %q, %q or %q)", "--sbom-output", "--sbom-image-output", "--sbom-purl-output", "--sbom-image-purl-output")
 	}
 	if len(options.Commands) > 1 && options.MergeStrategy == "" {
 		return options, fmt.Errorf("sbom configuration included multiple %q values but no %q value", "--sbom-scanner-command", "--sbom-merge-strategy")
@@ -977,7 +984,7 @@ func IDMappingOptionsFromFlagSet(flags *pflag.FlagSet, persistentFlags *pflag.Fl
 				usernsOption.Host = true
 			default:
 				how = strings.TrimPrefix(how, "ns:")
-				if _, err := os.Stat(how); err != nil {
+				if err := fileutils.Exists(how); err != nil {
 					return nil, nil, fmt.Errorf("checking %s namespace: %w", string(specs.UserNamespace), err)
 				}
 				logrus.Debugf("setting %q namespace to %q", string(specs.UserNamespace), how)
@@ -1072,7 +1079,7 @@ func NamespaceOptionsFromFlagSet(flags *pflag.FlagSet, findFlagFunc func(name st
 				how = strings.TrimPrefix(how, "ns:")
 				// if not a path we assume it is a comma separated network list, see setupNamespaces() in run_linux.go
 				if filepath.IsAbs(how) || what != string(specs.NetworkNamespace) {
-					if _, err := os.Stat(how); err != nil {
+					if err := fileutils.Exists(how); err != nil {
 						return nil, define.NetworkDefault, fmt.Errorf("checking %s namespace: %w", what, err)
 					}
 				}
@@ -1238,7 +1245,7 @@ func Secrets(secrets []string) (map[string]define.Secret, error) {
 			if err != nil {
 				return nil, fmt.Errorf("could not parse secrets: %w", err)
 			}
-			_, err = os.Stat(fullPath)
+			err = fileutils.Exists(fullPath)
 			if err != nil {
 				return nil, fmt.Errorf("could not parse secrets: %w", err)
 			}
@@ -1288,10 +1295,10 @@ func ContainerIgnoreFile(contextDir, path string, containerFiles []string) ([]st
 			containerfile = filepath.Join(contextDir, containerfile)
 		}
 		containerfileIgnore := ""
-		if _, err := os.Stat(containerfile + ".containerignore"); err == nil {
+		if err := fileutils.Exists(containerfile + ".containerignore"); err == nil {
 			containerfileIgnore = containerfile + ".containerignore"
 		}
-		if _, err := os.Stat(containerfile + ".dockerignore"); err == nil {
+		if err := fileutils.Exists(containerfile + ".dockerignore"); err == nil {
 			containerfileIgnore = containerfile + ".dockerignore"
 		}
 		if containerfileIgnore != "" {

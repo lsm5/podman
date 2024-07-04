@@ -3,7 +3,9 @@
 package wsl
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -13,13 +15,14 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/Microsoft/go-winio"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/homedir"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
-// nolint
 type SHELLEXECUTEINFO struct {
 	cbSize         uint32
 	fMask          uint32
@@ -38,7 +41,6 @@ type SHELLEXECUTEINFO struct {
 	hProcess       syscall.Handle
 }
 
-// nolint
 type Luid struct {
 	lowPart  uint32
 	highPart int32
@@ -54,19 +56,25 @@ type TokenPrivileges struct {
 	privileges     [1]LuidAndAttributes
 }
 
-// nolint // Cleaner to refer to the official OS constant names, and consistent with syscall
+// Cleaner to refer to the official OS constant names, and consistent with syscall
+// Ref: https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shellexecuteinfow#members
 const (
-	SEE_MASK_NOCLOSEPROCESS         = 0x40
-	EWX_FORCEIFHUNG                 = 0x10
-	EWX_REBOOT                      = 0x02
-	EWX_RESTARTAPPS                 = 0x40
-	SHTDN_REASON_MAJOR_APPLICATION  = 0x00040000
-	SHTDN_REASON_MINOR_INSTALLATION = 0x00000002
-	SHTDN_REASON_FLAG_PLANNED       = 0x80000000
-	TOKEN_ADJUST_PRIVILEGES         = 0x0020
-	TOKEN_QUERY                     = 0x0008
-	SE_PRIVILEGE_ENABLED            = 0x00000002
-	SE_ERR_ACCESSDENIED             = 0x05
+	//nolint:stylecheck
+	SEE_MASK_NOCLOSEPROCESS = 0x40
+	//nolint:stylecheck
+	SE_ERR_ACCESSDENIED = 0x05
+)
+
+const (
+	// ref: https://learn.microsoft.com/en-us/windows/win32/secauthz/privilege-constants#constants
+	rebootPrivilege = "SeShutdownPrivilege"
+
+	// "Application: Installation (Planned)" A planned restart or shutdown to perform application installation.
+	// ref: https://learn.microsoft.com/en-us/windows/win32/shutdown/system-shutdown-reason-codes
+	rebootReason = windows.SHTDN_REASON_MAJOR_APPLICATION | windows.SHTDN_REASON_MINOR_INSTALLATION | windows.SHTDN_REASON_FLAG_PLANNED
+
+	// ref: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-exitwindowsex#parameters
+	rebootFlags = windows.EWX_REBOOT | windows.EWX_RESTARTAPPS | windows.EWX_FORCEIFHUNG
 )
 
 func winVersionAtLeast(major uint, minor uint, build uint) bool {
@@ -87,7 +95,7 @@ func winVersionAtLeast(major uint, minor uint, build uint) bool {
 	return true
 }
 
-func hasAdminRights() bool {
+func HasAdminRights() bool {
 	var sid *windows.SID
 
 	// See: https://coolaj86.com/articles/golang-and-windows-and-admins-oh-my/
@@ -101,7 +109,9 @@ func hasAdminRights() bool {
 		logrus.Warnf("SID allocation error: %s", err)
 		return false
 	}
-	defer windows.FreeSid(sid)
+	defer func() {
+		_ = windows.FreeSid(sid)
+	}()
 
 	//  From MS docs:
 	// "If TokenHandle is NULL, CheckTokenMembership uses the impersonation
@@ -136,7 +146,7 @@ func relaunchElevatedWait() error {
 		lpFile:       uintptr(unsafe.Pointer(exe)),
 		lpParameters: uintptr(unsafe.Pointer(arg)),
 		lpDirectory:  uintptr(unsafe.Pointer(cwd)),
-		nShow:        1,
+		nShow:        syscall.SW_SHOWNORMAL,
 	}
 	info.cbSize = uint32(unsafe.Sizeof(*info))
 	procShellExecuteEx := shell32.NewProc("ShellExecuteExW")
@@ -148,8 +158,10 @@ func relaunchElevatedWait() error {
 		return wrapMaybef(err, "could not launch process, ShellEX Error = %d", info.hInstApp)
 	}
 
-	handle := syscall.Handle(info.hProcess)
-	defer syscall.CloseHandle(handle)
+	handle := info.hProcess
+	defer func() {
+		_ = syscall.CloseHandle(handle)
+	}()
 
 	w, err := syscall.WaitForSingleObject(handle, syscall.INFINITE)
 	switch w {
@@ -158,7 +170,7 @@ func relaunchElevatedWait() error {
 	case syscall.WAIT_FAILED:
 		return fmt.Errorf("could not wait for process, failed: %w", err)
 	default:
-		return errors.New("could not wait for process, unknown error")
+		return fmt.Errorf("could not wait for process, unknown error. event: %X, err: %v", w, err)
 	}
 	var code uint32
 	if err := syscall.GetExitCodeProcess(handle, &code); err != nil {
@@ -212,21 +224,13 @@ func reboot() error {
 	}
 
 	command := fmt.Sprintf(pShellLaunch, commFile)
-	if _, err := os.Lstat(filepath.Join(os.Getenv(localAppData), wtLocation)); err == nil {
+	if err := fileutils.Lexists(filepath.Join(os.Getenv(localAppData), wtLocation)); err == nil {
 		wtCommand := wtPrefix + command
 		// RunOnce is limited to 260 chars (supposedly no longer in Builds >= 19489)
 		// For now fallback in cases of long usernames (>89 chars)
 		if len(wtCommand) < 260 {
 			command = wtCommand
 		}
-	}
-
-	if err := addRunOnceRegistryEntry(command); err != nil {
-		return err
-	}
-
-	if err := obtainShutdownPrivilege(); err != nil {
-		return err
 	}
 
 	message := "To continue the process of enabling WSL, the system needs to reboot. " +
@@ -239,41 +243,17 @@ func reboot() error {
 		return nil
 	}
 
-	user32 := syscall.NewLazyDLL("user32")
-	procExit := user32.NewProc("ExitWindowsEx")
-	if ret, _, err := procExit.Call(EWX_REBOOT|EWX_RESTARTAPPS|EWX_FORCEIFHUNG,
-		SHTDN_REASON_MAJOR_APPLICATION|SHTDN_REASON_MINOR_INSTALLATION|SHTDN_REASON_FLAG_PLANNED); ret != 1 {
-		return fmt.Errorf("reboot failed: %w", err)
+	if err := addRunOnceRegistryEntry(command); err != nil {
+		return err
 	}
 
-	return nil
-}
-
-func obtainShutdownPrivilege() error {
-	const SeShutdownName = "SeShutdownPrivilege"
-
-	advapi32 := syscall.NewLazyDLL("advapi32")
-	OpenProcessToken := advapi32.NewProc("OpenProcessToken")
-	LookupPrivilegeValue := advapi32.NewProc("LookupPrivilegeValueW")
-	AdjustTokenPrivileges := advapi32.NewProc("AdjustTokenPrivileges")
-
-	proc, _ := syscall.GetCurrentProcess()
-
-	var hToken uintptr
-	if ret, _, err := OpenProcessToken.Call(uintptr(proc), TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY, uintptr(unsafe.Pointer(&hToken))); ret != 1 {
-		return fmt.Errorf("opening process token: %w", err)
-	}
-
-	var privs TokenPrivileges
-	if ret, _, err := LookupPrivilegeValue.Call(uintptr(0), uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(SeShutdownName))), uintptr(unsafe.Pointer(&(privs.privileges[0].luid)))); ret != 1 {
-		return fmt.Errorf("looking up shutdown privilege: %w", err)
-	}
-
-	privs.privilegeCount = 1
-	privs.privileges[0].attributes = SE_PRIVILEGE_ENABLED
-
-	if ret, _, err := AdjustTokenPrivileges.Call(hToken, 0, uintptr(unsafe.Pointer(&privs)), 0, uintptr(0), 0); ret != 1 {
-		return fmt.Errorf("enabling shutdown privilege on token: %w", err)
+	if err := winio.RunWithPrivilege(rebootPrivilege, func() error {
+		if err := windows.ExitWindowsEx(rebootFlags, rebootReason); err != nil {
+			return fmt.Errorf("execute ExitWindowsEx to reboot system failed: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("cannot reboot system: %w", err)
 	}
 
 	return nil
@@ -296,30 +276,25 @@ func addRunOnceRegistryEntry(command string) error {
 
 func encodeUTF16Bytes(s string) []byte {
 	u16 := utf16.Encode([]rune(s))
-	u16le := make([]byte, len(u16)*2)
-	for i := 0; i < len(u16); i++ {
-		u16le[i<<1] = byte(u16[i])
-		u16le[(i<<1)+1] = byte(u16[i] >> 8)
+	buf := new(bytes.Buffer)
+	for _, r := range u16 {
+		_ = binary.Write(buf, binary.LittleEndian, r)
 	}
-	return u16le
+	return buf.Bytes()
 }
 
 func MessageBox(caption, title string, fail bool) int {
-	var format int
+	var format uint32
 	if fail {
-		format = 0x10
+		format = windows.MB_ICONERROR
 	} else {
-		format = 0x41
+		format = windows.MB_OKCANCEL | windows.MB_ICONINFORMATION
 	}
 
-	user32 := syscall.NewLazyDLL("user32.dll")
 	captionPtr, _ := syscall.UTF16PtrFromString(caption)
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
-	ret, _, _ := user32.NewProc("MessageBoxW").Call(
-		uintptr(0),
-		uintptr(unsafe.Pointer(captionPtr)),
-		uintptr(unsafe.Pointer(titlePtr)),
-		uintptr(format))
+
+	ret, _ := windows.MessageBox(0, captionPtr, titlePtr, format)
 
 	return int(ret)
 }

@@ -8,10 +8,13 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 
 	"github.com/containers/podman/v5/pkg/machine/define"
 	"github.com/containers/podman/v5/pkg/systemd/parser"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -63,6 +66,7 @@ type DynamicIgnition struct {
 	Cfg        Config
 	Rootful    bool
 	NetRecover bool
+	Rosetta    bool
 }
 
 func (ign *DynamicIgnition) Write() error {
@@ -170,32 +174,6 @@ func (ign *DynamicIgnition) GenerateIgnitionConfig() error {
 		ignStorage.Links = append(ignStorage.Links, tzLink)
 	}
 
-	// Enables automatic login on the console;
-	// there's no security concerns here, and this makes debugging easier.
-	// xref https://docs.fedoraproject.org/en-US/fedora-coreos/tutorial-autologin/
-	var autologinDropin = `[Service]
-ExecStart=
-ExecStart=-/usr/sbin/agetty --autologin root --noclear %I $TERM
-`
-
-	deMoby := parser.NewUnitFile()
-	deMoby.Add("Unit", "Description", "Remove moby-engine")
-	deMoby.Add("Unit", "After", "systemd-machine-id-commit.service")
-	deMoby.Add("Unit", "Before", "zincati.service")
-	deMoby.Add("Unit", "ConditionPathExists", "!/var/lib/%N.stamp")
-
-	deMoby.Add("Service", "Type", "oneshot")
-	deMoby.Add("Service", "RemainAfterExit", "yes")
-	deMoby.Add("Service", "ExecStart", "/usr/bin/rpm-ostree override remove moby-engine")
-	deMoby.Add("Service", "ExecStart", "/usr/bin/rpm-ostree ex apply-live --allow-replacement")
-	deMoby.Add("Service", "ExecStartPost", "/bin/touch /var/lib/%N.stamp")
-
-	deMoby.Add("Install", "WantedBy", "default.target")
-	deMobyFile, err := deMoby.ToString()
-	if err != nil {
-		return err
-	}
-
 	// This service gets environment variables that are provided
 	// through qemu fw_cfg and then sets them into systemd/system.conf.d,
 	// profile.d and environment.d files
@@ -243,43 +221,12 @@ ExecStart=-/usr/sbin/agetty --autologin root --noclear %I $TERM
 				Name:    "podman.socket",
 			},
 			{
-				Enabled: BoolToPtr(false),
-				Name:    "docker.service",
-				Mask:    BoolToPtr(true),
-			},
-			{
-				Enabled: BoolToPtr(false),
-				Name:    "docker.socket",
-				Mask:    BoolToPtr(true),
-			},
-			{
-				Enabled:  BoolToPtr(true),
-				Name:     "remove-moby.service",
-				Contents: &deMobyFile,
-			},
-			{
+				// TODO Need to understand if this could play a role in machine
+				// updates given a certain configuration
 				// Disable auto-updating of fcos images
 				// https://github.com/containers/podman/issues/20122
 				Enabled: BoolToPtr(false),
 				Name:    "zincati.service",
-			},
-			{
-				Name: "serial-getty@.service",
-				Dropins: []Dropin{
-					{
-						Name:     "10-autologin.conf",
-						Contents: &autologinDropin,
-					},
-				},
-			},
-			{
-				Name: "getty@.service",
-				Dropins: []Dropin{
-					{
-						Name:     "10-autologin.conf",
-						Contents: &autologinDropin,
-					},
-				},
 			},
 		},
 	}
@@ -294,18 +241,17 @@ ExecStart=-/usr/sbin/agetty --autologin root --noclear %I $TERM
 		ignSystemd.Units = append(ignSystemd.Units, qemuUnit)
 	}
 
-	if ign.NetRecover {
-		contents, err := GetNetRecoveryUnitFile().ToString()
-		if err != nil {
-			return err
+	// Only AppleHv with Apple Silicon can use Rosetta
+	if ign.VMType == define.AppleHvVirt && runtime.GOARCH == "arm64" {
+		rosettaUnit := Systemd{
+			Units: []Unit{
+				{
+					Enabled: BoolToPtr(true),
+					Name:    "rosetta-activation.service",
+				},
+			},
 		}
-
-		recoveryUnit := Unit{
-			Enabled:  BoolToPtr(true),
-			Name:     "net-health-recovery.service",
-			Contents: &contents,
-		}
-		ignSystemd.Units = append(ignSystemd.Units, recoveryUnit)
+		ignSystemd.Units = append(ignSystemd.Units, rosettaUnit.Units...)
 	}
 
 	// Only after all checks are done
@@ -344,43 +290,10 @@ func getDirs(usrName string) []Directory {
 		dirs[i] = newDir
 	}
 
-	// Issue #11489: make sure that we can inject a custom registries.conf
-	// file on the system level to force a single search registry.
-	// The remote client does not yet support prompting for short-name
-	// resolution, so we enforce a single search registry (i.e., docker.io)
-	// as a workaround.
-	dirs = append(dirs, Directory{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/containers/registries.conf.d",
-			User:  GetNodeUsr("root"),
-		},
-		DirectoryEmbedded1: DirectoryEmbedded1{Mode: IntToPtr(0755)},
-	})
-
-	// The directory is used by envset-fwcfg.service
-	// for propagating environment variables that got
-	// from a host
-	dirs = append(dirs, Directory{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/systemd/system.conf.d",
-			User:  GetNodeUsr("root"),
-		},
-		DirectoryEmbedded1: DirectoryEmbedded1{Mode: IntToPtr(0755)},
-	}, Directory{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/environment.d",
-			User:  GetNodeUsr("root"),
-		},
-		DirectoryEmbedded1: DirectoryEmbedded1{Mode: IntToPtr(0755)},
-	})
-
 	return dirs
 }
 
-func getFiles(usrName string, uid int, rootful bool, vmtype define.VMType, netRecover bool) []File {
+func getFiles(usrName string, uid int, rootful bool, vmtype define.VMType, _ bool) []File {
 	files := make([]File, 0)
 
 	lingerExample := parser.NewUnitFile()
@@ -397,15 +310,12 @@ func getFiles(usrName string, uid int, rootful bool, vmtype define.VMType, netRe
 netns="bridge"
 pids_limit=0
 `
+	// TODO I think this can be removed but leaving breadcrumb until certain.
 	// Set deprecated machine_enabled until podman package on fcos is
 	// current enough to no longer require it
-	rootContainers := `[engine]
-machine_enabled=true
-`
-
-	delegateConf := `[Service]
-Delegate=memory pids cpu io
-`
+	// 	rootContainers := `[engine]
+	// machine_enabled=true
+	// `
 	// Prevent subUID from clashing with actual UID
 	subUID := 100000
 	subUIDs := 1000000
@@ -446,6 +356,7 @@ Delegate=memory pids cpu io
 			Mode: IntToPtr(0744),
 		},
 	})
+
 	// Set up /etc/subuid and /etc/subgid
 	for _, sub := range []string{"/etc/subuid", "/etc/subgid"} {
 		files = append(files, File{
@@ -465,50 +376,8 @@ Delegate=memory pids cpu io
 		})
 	}
 
-	// Set delegate.conf so cpu,io subsystem is delegated to non-root users as well for cgroupv2
-	// by default
-	files = append(files, File{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/systemd/system/user@.service.d/delegate.conf",
-			User:  GetNodeUsr("root"),
-		},
-		FileEmbedded1: FileEmbedded1{
-			Append: nil,
-			Contents: Resource{
-				Source: EncodeDataURLPtr(delegateConf),
-			},
-			Mode: IntToPtr(0644),
-		},
-	})
-
-	// Add a file into linger
-	files = append(files, File{
-		Node: Node{
-			Group: GetNodeGrp(usrName),
-			Path:  "/var/lib/systemd/linger/core",
-			User:  GetNodeUsr(usrName),
-		},
-		FileEmbedded1: FileEmbedded1{Mode: IntToPtr(0644)},
-	})
-
-	// Set deprecated machine_enabled to true to indicate we're in a VM
-	files = append(files, File{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/containers/containers.conf",
-			User:  GetNodeUsr("root"),
-		},
-		FileEmbedded1: FileEmbedded1{
-			Append: nil,
-			Contents: Resource{
-				Source: EncodeDataURLPtr(rootContainers),
-			},
-			Mode: IntToPtr(0644),
-		},
-	})
-
-	// Set machine marker file to indicate podman is in a qemu based machine
+	// Set machine marker file to indicate podman what vmtype we are
+	// operating under
 	files = append(files, File{
 		Node: Node{
 			Group: GetNodeGrp("root"),
@@ -519,42 +388,6 @@ Delegate=memory pids cpu io
 			Append: nil,
 			Contents: Resource{
 				Source: EncodeDataURLPtr(fmt.Sprintf("%s\n", vmtype.String())),
-			},
-			Mode: IntToPtr(0644),
-		},
-	})
-
-	// Increase the number of inotify instances.
-	files = append(files, File{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/sysctl.d/10-inotify-instances.conf",
-			User:  GetNodeUsr("root"),
-		},
-		FileEmbedded1: FileEmbedded1{
-			Append: nil,
-			Contents: Resource{
-				Source: EncodeDataURLPtr("fs.inotify.max_user_instances=524288\n"),
-			},
-			Mode: IntToPtr(0644),
-		},
-	})
-
-	// Issue #11489: make sure that we can inject a custom registries.conf
-	// file on the system level to force a single search registry.
-	// The remote client does not yet support prompting for short-name
-	// resolution, so we enforce a single search registry (i.e., docker.io)
-	// as a workaround.
-	files = append(files, File{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/containers/registries.conf.d/999-podman-machine.conf",
-			User:  GetNodeUsr("root"),
-		},
-		FileEmbedded1: FileEmbedded1{
-			Append: nil,
-			Contents: Resource{
-				Source: EncodeDataURLPtr("unqualified-search-registries=[\"docker.io\"]\n"),
 			},
 			Mode: IntToPtr(0644),
 		},
@@ -574,24 +407,6 @@ Delegate=memory pids cpu io
 		},
 	})
 
-	setDockerHost := `export DOCKER_HOST="unix://$(podman info -f "{{.Host.RemoteSocket.Path}}")"
-`
-
-	files = append(files, File{
-		Node: Node{
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/profile.d/docker-host.sh",
-			User:  GetNodeUsr("root"),
-		},
-		FileEmbedded1: FileEmbedded1{
-			Append: nil,
-			Contents: Resource{
-				Source: EncodeDataURLPtr(setDockerHost),
-			},
-			Mode: IntToPtr(0644),
-		},
-	})
-
 	// get certs for current user
 	userHome, err := os.UserHomeDir()
 	if err != nil {
@@ -605,67 +420,28 @@ Delegate=memory pids cpu io
 	certFiles = getCerts(filepath.Join(userHome, ".config/docker/certs.d"), true)
 	files = append(files, certFiles...)
 
-	if sslCertFile, ok := os.LookupEnv("SSL_CERT_FILE"); ok {
-		if _, err := os.Stat(sslCertFile); err == nil {
-			certFiles = getCerts(sslCertFile, false)
+	sslCertFileName, ok := os.LookupEnv(sslCertFile)
+	if ok {
+		if err := fileutils.Exists(sslCertFileName); err == nil {
+			certFiles = getCerts(sslCertFileName, false)
 			files = append(files, certFiles...)
 		} else {
-			logrus.Warnf("Invalid path in SSL_CERT_FILE: %q", err)
+			logrus.Warnf("Invalid path in %s: %q", sslCertFile, err)
 		}
 	}
 
-	if sslCertDir, ok := os.LookupEnv("SSL_CERT_DIR"); ok {
-		if _, err := os.Stat(sslCertDir); err == nil {
-			certFiles = getCerts(sslCertDir, true)
+	sslCertDirName, ok := os.LookupEnv(sslCertDir)
+	if ok {
+		if err := fileutils.Exists(sslCertDirName); err == nil {
+			certFiles = getCerts(sslCertDirName, true)
 			files = append(files, certFiles...)
 		} else {
-			logrus.Warnf("Invalid path in SSL_CERT_DIR: %q", err)
+			logrus.Warnf("Invalid path in %s: %q", sslCertDir, err)
 		}
 	}
-
-	files = append(files, File{
-		Node: Node{
-			User:  GetNodeUsr("root"),
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/chrony.conf",
-		},
-		FileEmbedded1: FileEmbedded1{
-			Append: []Resource{{
-				Source: EncodeDataURLPtr("\nconfdir /etc/chrony.d\n"),
-			}},
-		},
-	})
-
-	// Issue #11541: allow Chrony to update the system time when it has drifted
-	// far from NTP time.
-	files = append(files, File{
-		Node: Node{
-			User:  GetNodeUsr("root"),
-			Group: GetNodeGrp("root"),
-			Path:  "/etc/chrony.d/50-podman-makestep.conf",
-		},
-		FileEmbedded1: FileEmbedded1{
-			Contents: Resource{
-				Source: EncodeDataURLPtr("makestep 1 -1\n"),
-			},
-		},
-	})
-
-	// Only necessary for qemu on mac
-	if netRecover {
-		files = append(files, File{
-			Node: Node{
-				User:  GetNodeUsr("root"),
-				Group: GetNodeGrp("root"),
-				Path:  "/usr/local/bin/net-health-recovery.sh",
-			},
-			FileEmbedded1: FileEmbedded1{
-				Mode: IntToPtr(0755),
-				Contents: Resource{
-					Source: EncodeDataURLPtr(GetNetRecoveryFile()),
-				},
-			},
-		})
+	if sslCertFileName != "" || sslCertDirName != "" {
+		// If we copied certs via env then also make the to set the env in the VM.
+		files = append(files, getSSLEnvironmentFiles(sslCertFileName, sslCertDirName)...)
 	}
 
 	return files
@@ -709,16 +485,18 @@ func getCerts(certsDir string, isDir bool) []File {
 	return files
 }
 
-func prepareCertFile(path string, name string) (File, error) {
-	b, err := os.ReadFile(path)
+func prepareCertFile(fpath string, name string) (File, error) {
+	b, err := os.ReadFile(fpath)
 	if err != nil {
 		logrus.Warnf("Unable to read cert file %v", err)
 		return File{}, err
 	}
 
-	targetPath := filepath.Join(define.UserCertsTargetPath, name)
+	// Note path is required here as we always create a path for the linux VM
+	// even when the client run on windows so we cannot use filepath.
+	targetPath := path.Join(define.UserCertsTargetPath, name)
 
-	logrus.Debugf("Copying cert file from '%s' to '%s'.", path, targetPath)
+	logrus.Debugf("Copying cert file from '%s' to '%s'.", fpath, targetPath)
 
 	file := File{
 		Node: Node{
@@ -735,6 +513,57 @@ func prepareCertFile(path string, name string) (File, error) {
 		},
 	}
 	return file, nil
+}
+
+const (
+	systemdSSLConf = "/etc/systemd/system.conf.d/podman-machine-ssl.conf"
+	envdSSLConf    = "/etc/environment.d/podman-machine-ssl.conf"
+	profileSSLConf = "/etc/profile.d/podman-machine-ssl.sh"
+	sslCertFile    = "SSL_CERT_FILE"
+	sslCertDir     = "SSL_CERT_DIR"
+)
+
+func getSSLEnvironmentFiles(sslFileName, sslDirName string) []File {
+	systemdFileContent := "[Manager]\n"
+	envdFileContent := ""
+	profileFileContent := ""
+	if sslFileName != "" {
+		// certs are written to UserCertsTargetPath see prepareCertFile()
+		// Note the mix of path/filepath is intentional and required, we want to get the name of
+		// a path on the client (i.e. windows) but then join to linux path that will be used inside the VM.
+		env := fmt.Sprintf("%s=%q\n", sslCertFile, path.Join(define.UserCertsTargetPath, filepath.Base(sslFileName)))
+		systemdFileContent += "DefaultEnvironment=" + env
+		envdFileContent += env
+		profileFileContent += "export " + env
+	}
+	if sslDirName != "" {
+		// certs are written to UserCertsTargetPath see prepareCertFile()
+		env := fmt.Sprintf("%s=%q\n", sslCertDir, define.UserCertsTargetPath)
+		systemdFileContent += "DefaultEnvironment=" + env
+		envdFileContent += env
+		profileFileContent += "export " + env
+	}
+	return []File{
+		getSSLFile(systemdSSLConf, systemdFileContent),
+		getSSLFile(envdSSLConf, envdFileContent),
+		getSSLFile(profileSSLConf, profileFileContent),
+	}
+}
+
+func getSSLFile(path, content string) File {
+	return File{
+		Node: Node{
+			Group: GetNodeGrp("root"),
+			Path:  path,
+			User:  GetNodeUsr("root"),
+		},
+		FileEmbedded1: FileEmbedded1{
+			Contents: Resource{
+				Source: EncodeDataURLPtr(content),
+			},
+			Mode: IntToPtr(0644),
+		},
+	}
 }
 
 func getLinks(usrName string) []Link {
@@ -871,7 +700,7 @@ func GetNetRecoveryUnitFile() *parser.UnitFile {
 
 func DefaultReadyUnitFile() parser.UnitFile {
 	u := parser.NewUnitFile()
-	u.Add("Unit", "After", "remove-moby.service sshd.socket sshd.service")
+	u.Add("Unit", "After", "sshd.socket sshd.service")
 	u.Add("Unit", "OnFailure", "emergency.target")
 	u.Add("Unit", "OnFailureJobMode", "isolate")
 	u.Add("Service", "Type", "oneshot")

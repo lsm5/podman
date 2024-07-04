@@ -3,13 +3,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"io/fs"
-	"errors"
 
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/spf13/cobra"
 )
 
@@ -58,7 +59,7 @@ func uninstall(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get the file information of dockerSock
-	if _, err := os.Lstat(dockerSock); err != nil {
+	if err := fileutils.Lexists(dockerSock); err != nil {
 		// If the error is due to the file not existing, return nil
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -67,7 +68,7 @@ func uninstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not stat dockerSock: %v", err)
 	}
 	if target, err := os.Readlink(dockerSock); err != nil {
-		//Return an error if unable to read the symlink
+		// Return an error if unable to read the symlink
 		return fmt.Errorf("could not read dockerSock symlink: %v", err)
 	} else {
 		// Check if the target of the symlink matches the expected target

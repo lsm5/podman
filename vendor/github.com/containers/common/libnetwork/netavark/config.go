@@ -10,13 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"time"
 
 	internalutil "github.com/containers/common/libnetwork/internal/util"
 	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/storage/pkg/stringid"
-	"golang.org/x/exp/slices"
 )
 
 func sliceRemoveDuplicates(strList []string) []string {
@@ -309,7 +309,7 @@ func createIpvlanOrMacvlan(network *types.Network) error {
 			return errIpvlanNoDHCP
 		}
 		if len(network.Subnets) > 0 {
-			return fmt.Errorf("ipam driver dhcp set but subnets are set")
+			return errors.New("ipam driver dhcp set but subnets are set")
 		}
 	}
 
@@ -374,6 +374,11 @@ func (n *netavarkNetwork) NetworkRemove(nameOrID string) error {
 	// Removing the default network is not allowed.
 	if network.Name == n.defaultNetwork {
 		return fmt.Errorf("default network %s cannot be removed", n.defaultNetwork)
+	}
+
+	// remove the ipam bucket for this network
+	if err := n.removeNetworkIPAMBucket(network); err != nil {
+		return err
 	}
 
 	file := filepath.Join(n.networkConfigDir, network.Name+".json")

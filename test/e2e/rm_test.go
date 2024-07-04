@@ -2,11 +2,11 @@ package integration
 
 import (
 	"fmt"
+	"path/filepath"
 
 	. "github.com/containers/podman/v5/test/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/onsi/gomega/gexec"
 )
 
 var _ = Describe("Podman rm", func() {
@@ -28,8 +28,7 @@ var _ = Describe("Podman rm", func() {
 
 		result := podmanTest.Podman([]string{"rm", cid})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(2))
-		Expect(result.ErrorToString()).To(ContainSubstring("containers cannot be removed without force"))
+		Expect(result).Should(ExitWithError(2, "containers cannot be removed without force"))
 	})
 
 	It("podman rm created container", func() {
@@ -122,16 +121,15 @@ var _ = Describe("Podman rm", func() {
 	})
 
 	It("podman rm --cidfile", func() {
-		tmpDir := GinkgoT().TempDir()
-		tmpFile := tmpDir + "cid"
+		cidFile := filepath.Join(tempdir, "cid")
 
-		session := podmanTest.Podman([]string{"create", "--cidfile", tmpFile, ALPINE, "ls"})
+		session := podmanTest.Podman([]string{"create", "--cidfile", cidFile, ALPINE, "ls"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid := session.OutputToStringArray()[0]
 		Expect(podmanTest.NumberOfContainers()).To(Equal(1))
 
-		result := podmanTest.Podman([]string{"rm", "--cidfile", tmpFile})
+		result := podmanTest.Podman([]string{"rm", "--cidfile", cidFile})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(ExitCleanly())
 		output := result.OutputToString()
@@ -140,23 +138,22 @@ var _ = Describe("Podman rm", func() {
 	})
 
 	It("podman rm multiple --cidfile", func() {
-		tmpDir := GinkgoT().TempDir()
-		tmpFile1 := tmpDir + "cid-1"
-		tmpFile2 := tmpDir + "cid-2"
+		cidFile1 := filepath.Join(tempdir, "cid-1")
+		cidFile2 := filepath.Join(tempdir, "cid-2")
 
-		session := podmanTest.Podman([]string{"create", "--cidfile", tmpFile1, ALPINE, "ls"})
+		session := podmanTest.Podman([]string{"create", "--cidfile", cidFile1, ALPINE, "ls"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid1 := session.OutputToStringArray()[0]
 		Expect(podmanTest.NumberOfContainers()).To(Equal(1))
 
-		session = podmanTest.Podman([]string{"create", "--cidfile", tmpFile2, ALPINE, "ls"})
+		session = podmanTest.Podman([]string{"create", "--cidfile", cidFile2, ALPINE, "ls"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(ExitCleanly())
 		cid2 := session.OutputToStringArray()[0]
 		Expect(podmanTest.NumberOfContainers()).To(Equal(2))
 
-		result := podmanTest.Podman([]string{"rm", "--cidfile", tmpFile1, "--cidfile", tmpFile2})
+		result := podmanTest.Podman([]string{"rm", "--cidfile", cidFile1, "--cidfile", cidFile2})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(ExitCleanly())
 		output := result.OutputToString()
@@ -170,23 +167,19 @@ var _ = Describe("Podman rm", func() {
 
 		result := podmanTest.Podman([]string{"rm", "--cidfile", "foobar", "--latest"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("--all, --latest, and --cidfile cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all, --latest, and --cidfile cannot be used together"))
 
 		result = podmanTest.Podman([]string{"rm", "--cidfile", "foobar", "--all"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("--all, --latest, and --cidfile cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all, --latest, and --cidfile cannot be used together"))
 
 		result = podmanTest.Podman([]string{"rm", "--cidfile", "foobar", "--all", "--latest"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("--all, --latest, and --cidfile cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all, --latest, and --cidfile cannot be used together"))
 
 		result = podmanTest.Podman([]string{"rm", "--latest", "--all"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).Should(Exit(125))
-		Expect(result.ErrorToString()).To(ContainSubstring("--all and --latest cannot be used together"))
+		Expect(result).Should(ExitWithError(125, "--all and --latest cannot be used together"))
 	})
 
 	It("podman rm --all", func() {
@@ -215,8 +208,7 @@ var _ = Describe("Podman rm", func() {
 
 		session = podmanTest.Podman([]string{"rm", "bogus", cid})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(1))
-		Expect(session.ErrorToString()).To(ContainSubstring("\"bogus\" found: no such container"))
+		Expect(session).Should(ExitWithError(1, `no container with ID or name "bogus" found: no such container`))
 		if IsRemote() {
 			Expect(session.OutputToString()).To(BeEquivalentTo(cid))
 		}
@@ -233,8 +225,7 @@ var _ = Describe("Podman rm", func() {
 	It("podman rm bogus container", func() {
 		session := podmanTest.Podman([]string{"rm", "bogus"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(1))
-		Expect(session.ErrorToString()).To(ContainSubstring("\"bogus\" found: no such container"))
+		Expect(session).Should(ExitWithError(1, `no container with ID or name "bogus" found: no such container`))
 	})
 
 	It("podman rm bogus container and a running container", func() {
@@ -244,13 +235,11 @@ var _ = Describe("Podman rm", func() {
 
 		session = podmanTest.Podman([]string{"rm", "bogus", "test1"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(1))
-		Expect(session.ErrorToString()).To(ContainSubstring("\"bogus\" found: no such container"))
+		Expect(session).Should(ExitWithError(1, `no container with ID or name "bogus" found: no such container`))
 
 		session = podmanTest.Podman([]string{"rm", "test1", "bogus"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(1))
-		Expect(session.ErrorToString()).To(ContainSubstring("\"bogus\" found: no such container"))
+		Expect(session).Should(ExitWithError(1, `no container with ID or name "bogus" found: no such container`))
 	})
 
 	It("podman rm --ignore bogus container and a running container", func() {
@@ -260,8 +249,7 @@ var _ = Describe("Podman rm", func() {
 
 		session = podmanTest.Podman([]string{"rm", "--ignore", "test1", "bogus"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(2))
-		Expect(session.ErrorToString()).To(ContainSubstring("containers cannot be removed without force"))
+		Expect(session).Should(ExitWithError(2, "containers cannot be removed without force"))
 
 		session = podmanTest.Podman([]string{"rm", "-t", "0", "--force", "--ignore", "bogus", "test1"})
 		session.WaitWithDefaultTimeout()
@@ -293,8 +281,7 @@ var _ = Describe("Podman rm", func() {
 
 		session1 = podmanTest.Podman([]string{"rm", cid1, "-f", "--filter", "status=running"})
 		session1.WaitWithDefaultTimeout()
-		Expect(session1).Should(Exit(125))
-		Expect(session1.ErrorToString()).To(ContainSubstring("--filter takes no arguments"))
+		Expect(session1).Should(ExitWithError(125, "--filter takes no arguments"))
 
 		session1 = podmanTest.Podman([]string{"rm", "-a", "-f", "--filter", fmt.Sprintf("id=%swrongid", shortCid3)})
 		session1.WaitWithDefaultTimeout()

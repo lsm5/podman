@@ -42,6 +42,10 @@ func Events(ctx context.Context, eventChan chan types.Event, cancelChan chan boo
 		}()
 	}
 
+	if response.StatusCode != http.StatusOK {
+		return response.Process(nil)
+	}
+
 	dec := json.NewDecoder(response.Body)
 	for err = (error)(nil); err == nil; {
 		var e = types.Event{}
@@ -75,6 +79,26 @@ func Prune(ctx context.Context, options *PruneOptions) (*types.SystemPruneReport
 		return nil, err
 	}
 	response, err := conn.DoRequest(ctx, nil, http.MethodPost, "/system/prune", params, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	return &report, response.Process(&report)
+}
+
+func Check(ctx context.Context, options *CheckOptions) (*types.SystemCheckReport, error) {
+	var report types.SystemCheckReport
+
+	conn, err := bindings.GetClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	params, err := options.ToParams()
+	if err != nil {
+		return nil, err
+	}
+	response, err := conn.DoRequest(ctx, nil, http.MethodPost, "/system/check", params, nil)
 	if err != nil {
 		return nil, err
 	}

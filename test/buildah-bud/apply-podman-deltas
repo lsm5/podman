@@ -134,9 +134,7 @@ errmsg "non-directory/Dockerfile: not a directory" \
        "bud with a path to a Dockerfile (-f) containing a non-directory entry"
 
 errmsg "no such file or directory" \
-       "Error: context must be a directory:" \
-       "bud with dir for file but no Dockerfile in dir" \
-       "bud with bad dir Dockerfile"
+       "Error: context must be a directory:"
 
 errmsg "no such file or directory" \
        "Error: no context directory and no Containerfile specified" \
@@ -144,11 +142,11 @@ errmsg "no such file or directory" \
 
 errmsg "is not a file" \
        "Error: no Containerfile or Dockerfile specified or found in context directory" \
-       "bud with specified context should fail if assumed Dockerfile is a directory"
+       "bud with specified context should fail if Dockerfile in context directory is actually a file"
 
 errmsg "no such file or directory" \
        "context must be a directory" \
-       "bud with specified context should fail if context contains not-existing Dockerfile"
+       "bud with specified context should fail if context directory does not exist"
 
 # 2022-04-26 after buildah PR 3926 (where Ed added error-message checks"
 errmsg "no FROM statement found" \
@@ -159,8 +157,8 @@ errmsg "no contents in .*" \
        "Error: context must be a directory: .*" \
        "bud with specified context should fail if context contains empty Dockerfile"
 
-errmsg "credential file is not accessible: stat /tmp/nonexistent: no such file or directory" \
-       "Error: credential file is not accessible: stat /tmp/nonexistent: no such file or directory" \
+errmsg "credential file is not accessible: faccessat /tmp/nonexistent: no such file or directory" \
+       "Error: credential file is not accessible: faccessat /tmp/nonexistent: no such file or directory" \
        "bud with Containerfile should fail with nonexistent authfile"
 
 errmsg "cannot find Containerfile or Dockerfile" \
@@ -256,6 +254,9 @@ skip_if_remote "Explicit request in buildah PR 4190 to skip this on remote" \
 skip_if_rootless "Flakes when run rootless, too. See Buildah PR 4190" \
                  "build: test race in updating image name while performing parallel commits"
 
+skip_if_remote "--events-backend does not work with podman-remote" \
+	       "build test default ulimits"
+
 ###############################################################################
 # BEGIN tests which are skipped due to actual podman or podman-remote bugs.
 
@@ -287,6 +288,16 @@ skip_if_rootless_remote "FIXME: not sure if 17788 or some other bug" \
 # 2023-06-13 buildah 4746 changed exit code & expected error message
 skip "FIXME: 2023-06-13 buildah PR 4746 broke this test" \
      "bud with encrypted FROM image"
+
+# 2024-04-16 test needs to be fixed in buildah repo, to use another registry
+skip "FIXME: 2024-04-16 nixery is down" \
+     "bud-implicit-no-history"
+
+# 2024-05-28 FIXME FIXME FIXME new VMs barf on all git tests, can't connect
+skip "FIXME: 2024-05-28 new VMs from #338" \
+     "bud-git-context" \
+     "bud-git-context-subdirectory" \
+     "bud using gitrepo and branch"
 
 # END   temporary workarounds that must be reevaluated periodically
 ###############################################################################

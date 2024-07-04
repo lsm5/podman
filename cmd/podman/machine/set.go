@@ -3,13 +3,12 @@
 package machine
 
 import (
-	"fmt"
-
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/strongunits"
 	"github.com/containers/podman/v5/cmd/podman/registry"
-	"github.com/containers/podman/v5/pkg/machine"
 	"github.com/containers/podman/v5/pkg/machine/define"
+	"github.com/containers/podman/v5/pkg/machine/env"
+	"github.com/containers/podman/v5/pkg/machine/shim"
 	"github.com/containers/podman/v5/pkg/machine/vmconfigs"
 	"github.com/spf13/cobra"
 )
@@ -89,16 +88,12 @@ func init() {
 }
 
 func setMachine(cmd *cobra.Command, args []string) error {
-	var (
-		err error
-	)
-
 	vmName := defaultMachineName
 	if len(args) > 0 && len(args[0]) > 0 {
 		vmName = args[0]
 	}
 
-	dirs, err := machine.GetMachineDirs(provider.VMType())
+	dirs, err := env.GetMachineDirs(provider.VMType())
 	if err != nil {
 		return err
 	}
@@ -112,18 +107,16 @@ func setMachine(cmd *cobra.Command, args []string) error {
 		setOpts.Rootful = &setFlags.Rootful
 	}
 	if cmd.Flags().Changed("cpus") {
-		mc.Resources.CPUs = setFlags.CPUs
-		setOpts.CPUs = &mc.Resources.CPUs
+		setOpts.CPUs = &setFlags.CPUs
 	}
 	if cmd.Flags().Changed("memory") {
-		mc.Resources.Memory = setFlags.Memory
-		setOpts.Memory = &mc.Resources.Memory
+		newMemory := strongunits.MiB(setFlags.Memory)
+		if err := checkMaxMemory(newMemory); err != nil {
+			return err
+		}
+		setOpts.Memory = &newMemory
 	}
 	if cmd.Flags().Changed("disk-size") {
-		if setFlags.DiskSize <= mc.Resources.DiskSize {
-			return fmt.Errorf("new disk size must be larger than %d GB", mc.Resources.DiskSize)
-		}
-		mc.Resources.DiskSize = setFlags.DiskSize
 		newDiskSizeGB := strongunits.GiB(setFlags.DiskSize)
 		setOpts.DiskSize = &newDiskSizeGB
 	}
@@ -136,10 +129,5 @@ func setMachine(cmd *cobra.Command, args []string) error {
 
 	// At this point, we have the known changed information, etc
 	// Walk through changes to the providers if they need them
-	if err := provider.SetProviderAttrs(mc, setOpts); err != nil {
-		return err
-	}
-
-	// Update the configuration file last if everything earlier worked
-	return mc.Write()
+	return shim.Set(mc, provider, setOpts)
 }

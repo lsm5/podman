@@ -543,6 +543,15 @@ func (s *StageExecutor) performCopy(excludes []string, copies ...imagebuilder.Co
 			StripSetuidBit:    stripSetuid,
 			StripSetgidBit:    stripSetgid,
 		}
+		if len(copy.Files) > 0 {
+			// If we are copying heredoc files, we need to temporary place
+			// them in the context dir and then move to container via copier
+			// there are cases where .containerignore can have a patterns like
+			// '*' which can match our heredoc files so let's not set any excludes
+			// or IgnoreFile for this copy.
+			options.Excludes = nil
+			options.IgnoreFile = ""
+		}
 		if err := s.builder.Add(copy.Dest, copy.Download, options, sources...); err != nil {
 			return err
 		}
@@ -751,7 +760,7 @@ func (s *StageExecutor) Run(run imagebuilder.Run, config docker.Config) error {
 		Env:              config.Env,
 		Hostname:         config.Hostname,
 		Logger:           s.executor.logger,
-		Mounts:           append([]Mount{}, s.executor.transientMounts...),
+		Mounts:           s.executor.transientMounts,
 		NamespaceOptions: namespaceOptions,
 		NoHostname:       s.executor.noHostname,
 		NoHosts:          s.executor.noHosts,
@@ -906,6 +915,7 @@ func (s *StageExecutor) prepare(ctx context.Context, from string, initializeIBCo
 		Format:                s.executor.outputFormat,
 		Capabilities:          s.executor.capabilities,
 		Devices:               s.executor.devices,
+		DeviceSpecs:           s.executor.deviceSpecs,
 		MaxPullRetries:        s.executor.maxPullPushRetries,
 		PullRetryDelay:        s.executor.retryPullPushDelay,
 		OciDecryptConfig:      s.executor.ociDecryptConfig,
@@ -913,6 +923,7 @@ func (s *StageExecutor) prepare(ctx context.Context, from string, initializeIBCo
 		ProcessLabel:          s.executor.processLabel,
 		MountLabel:            s.executor.mountLabel,
 		PreserveBaseImageAnns: preserveBaseImageAnnotations,
+		CDIConfigDir:          s.executor.cdiConfigDir,
 	}
 
 	builder, err = buildah.NewBuilder(ctx, s.executor.store, builderOptions)
@@ -1217,7 +1228,24 @@ func (s *StageExecutor) Execute(ctx context.Context, base string) (imgID string,
 		}
 		logrus.Debugf("Parsed Step: %+v", *step)
 		if !s.executor.quiet {
-			s.log("%s", step.Original)
+			logMsg := step.Original
+			if len(step.Heredocs) > 0 {
+				summarizeHeredoc := func(doc string) string {
+					doc = strings.TrimSpace(doc)
+					lines := strings.Split(strings.ReplaceAll(doc, "\r\n", "\n"), "\n")
+					summary := lines[0]
+					if len(lines) > 1 {
+						summary += "..."
+					}
+					return summary
+				}
+
+				for _, doc := range node.Heredocs {
+					heredocContent := summarizeHeredoc(doc.Content)
+					logMsg = logMsg + " (" + heredocContent + ")"
+				}
+			}
+			s.log("%s", logMsg)
 		}
 
 		// Check if there's a --from if the step command is COPY.
@@ -1383,7 +1411,7 @@ func (s *StageExecutor) Execute(ctx context.Context, base string) (imgID string,
 			}
 		}
 
-		needsCacheKey := (len(s.executor.cacheFrom) != 0 || len(s.executor.cacheTo) != 0) && !avoidLookingCache
+		needsCacheKey := (len(s.executor.cacheFrom) != 0 && !avoidLookingCache) || len(s.executor.cacheTo) != 0
 
 		// If we have to commit for this instruction, only assign the
 		// stage's configured output name to the last layer.
@@ -1414,7 +1442,6 @@ func (s *StageExecutor) Execute(ctx context.Context, base string) (imgID string,
 			// and copy the content.
 			canMatchCacheOnlyAfterRun = (step.Command == command.Add || step.Command == command.Copy)
 			if canMatchCacheOnlyAfterRun {
-				s.didExecute = true
 				if err = ib.Run(step, s, noRunsRemaining); err != nil {
 					logrus.Debugf("Error building at step %+v: %v", *step, err)
 					return "", nil, false, fmt.Errorf("building at STEP \"%s\": %w", step.Message, err)
@@ -1450,6 +1477,9 @@ func (s *StageExecutor) Execute(ctx context.Context, base string) (imgID string,
 						pulledAndUsedCacheImage = true
 					}
 				}
+			}
+			if canMatchCacheOnlyAfterRun && cacheID == "" {
+				s.didExecute = true
 			}
 		}
 
@@ -1737,11 +1767,15 @@ func (s *StageExecutor) getCreatedBy(node *parser.Node, addedContentSummary stri
 		buildArgs := s.getBuildArgsKey()
 		return "/bin/sh -c #(nop) ARG " + buildArgs
 	case "RUN":
+		shArg := ""
 		buildArgs := s.getBuildArgsResolvedForRun()
-		if buildArgs != "" {
-			return "|" + strconv.Itoa(len(strings.Split(buildArgs, " "))) + " " + buildArgs + " /bin/sh -c " + node.Original[4:]
+		if len(node.Original) > 4 {
+			shArg = node.Original[4:]
 		}
-		result := "/bin/sh -c " + node.Original[4:]
+		if buildArgs != "" {
+			return "|" + strconv.Itoa(len(strings.Split(buildArgs, " "))) + " " + buildArgs + " /bin/sh -c " + shArg
+		}
+		result := "/bin/sh -c " + shArg
 		if len(node.Heredocs) > 0 {
 			for _, doc := range node.Heredocs {
 				heredocContent := strings.TrimSpace(doc.Content)

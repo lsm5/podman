@@ -3,17 +3,16 @@ package manifest
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/containers/image/v5/internal/manifest"
 	compressiontypes "github.com/containers/image/v5/pkg/compression/types"
 	"github.com/containers/image/v5/types"
 	ociencspec "github.com/containers/ocicrypt/spec"
-	chunkedToc "github.com/containers/storage/pkg/chunked/toc"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"golang.org/x/exp/slices"
 )
 
 // BlobInfoFromOCI1Descriptor returns a types.BlobInfo based on the input OCI1 descriptor.
@@ -168,7 +167,7 @@ func (m *OCI1) UpdateLayerInfos(layerInfos []types.BlobInfo) error {
 // an error if the mediatype does not support encryption
 func getEncryptedMediaType(mediatype string) (string, error) {
 	if slices.Contains(strings.Split(mediatype, "+")[1:], "encrypted") {
-		return "", fmt.Errorf("unsupported mediaType: %v already encrypted", mediatype)
+		return "", fmt.Errorf("unsupported mediaType: %q already encrypted", mediatype)
 	}
 	unsuffixedMediatype := strings.Split(mediatype, "+")[0]
 	switch unsuffixedMediatype {
@@ -177,17 +176,18 @@ func getEncryptedMediaType(mediatype string) (string, error) {
 		return mediatype + "+encrypted", nil
 	}
 
-	return "", fmt.Errorf("unsupported mediaType to encrypt: %v", mediatype)
+	return "", fmt.Errorf("unsupported mediaType to encrypt: %q", mediatype)
 }
 
-// getEncryptedMediaType will return the mediatype to its encrypted counterpart and return
+// getDecryptedMediaType will return the mediatype to its encrypted counterpart and return
 // an error if the mediatype does not support decryption
 func getDecryptedMediaType(mediatype string) (string, error) {
-	if !strings.HasSuffix(mediatype, "+encrypted") {
-		return "", fmt.Errorf("unsupported mediaType to decrypt: %v", mediatype)
+	res, ok := strings.CutSuffix(mediatype, "+encrypted")
+	if !ok {
+		return "", fmt.Errorf("unsupported mediaType to decrypt: %q", mediatype)
 	}
 
-	return strings.TrimSuffix(mediatype, "+encrypted"), nil
+	return res, nil
 }
 
 // Serialize returns the manifest in a blob format.
@@ -260,42 +260,7 @@ func (m *OCI1) ImageID(diffIDs []digest.Digest) (string, error) {
 	if err := m.Config.Digest.Validate(); err != nil {
 		return "", err
 	}
-
-	// If there is any layer that is using partial content, we calculate the image ID
-	// in a different way since the diffID cannot be validated as for regular pulled images.
-	for _, layer := range m.Layers {
-		toc, err := chunkedToc.GetTOCDigest(layer.Annotations)
-		if err != nil {
-			return "", fmt.Errorf("error looking up annotation for layer %q: %w", layer.Digest, err)
-		}
-		if toc != nil {
-			return m.calculateImageIDForPartialImage(diffIDs)
-		}
-	}
-
-	return m.Config.Digest.Hex(), nil
-}
-
-func (m *OCI1) calculateImageIDForPartialImage(diffIDs []digest.Digest) (string, error) {
-	newID := digest.Canonical.Digester()
-	for i, layer := range m.Layers {
-		diffID := diffIDs[i]
-		_, err := newID.Hash().Write([]byte(diffID.Hex()))
-		if err != nil {
-			return "", fmt.Errorf("error writing diffID %q: %w", diffID, err)
-		}
-		toc, err := chunkedToc.GetTOCDigest(layer.Annotations)
-		if err != nil {
-			return "", fmt.Errorf("error looking up annotation for layer %q: %w", layer.Digest, err)
-		}
-		if toc != nil {
-			_, err = newID.Hash().Write([]byte(toc.Hex()))
-			if err != nil {
-				return "", fmt.Errorf("error writing TOC %q: %w", toc, err)
-			}
-		}
-	}
-	return newID.Digest().Hex(), nil
+	return m.Config.Digest.Encoded(), nil
 }
 
 // CanChangeLayerCompression returns true if we can compress/decompress layers with mimeType in the current image

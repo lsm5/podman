@@ -10,17 +10,6 @@ import (
 )
 
 var _ = Describe("podman machine stop", func() {
-	var (
-		mb      *machineTestBuilder
-		testDir string
-	)
-
-	BeforeEach(func() {
-		testDir, mb = setup()
-	})
-	AfterEach(func() {
-		teardown(originalHomeDir, testDir, mb)
-	})
 
 	It("stop bad name", func() {
 		i := stopMachine{}
@@ -34,7 +23,7 @@ var _ = Describe("podman machine stop", func() {
 		name := randomString()
 		i := new(initMachine)
 		starttime := time.Now()
-		session, err := mb.setName(name).setCmd(i.withImagePath(mb.imagePath).withNow()).run()
+		session, err := mb.setName(name).setCmd(i.withImage(mb.imagePath).withNow()).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 

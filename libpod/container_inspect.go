@@ -9,6 +9,7 @@ import (
 
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/libpod/driver"
+	"github.com/containers/podman/v5/pkg/signal"
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/containers/storage/types"
 	"github.com/docker/go-units"
@@ -388,7 +389,7 @@ func (c *Container) generateInspectContainerConfig(spec *spec.Spec) *define.Insp
 
 	// Leave empty if not explicitly overwritten by user
 	if len(c.config.Entrypoint) != 0 {
-		ctrConfig.Entrypoint = strings.Join(c.config.Entrypoint, " ")
+		ctrConfig.Entrypoint = c.config.Entrypoint
 	}
 
 	if len(c.config.Labels) != 0 {
@@ -404,8 +405,7 @@ func (c *Container) generateInspectContainerConfig(spec *spec.Spec) *define.Insp
 			ctrConfig.Annotations[k] = v
 		}
 	}
-
-	ctrConfig.StopSignal = c.config.StopSignal
+	ctrConfig.StopSignal = signal.ToDockerFormat(c.config.StopSignal)
 	// TODO: should JSON deep copy this to ensure internal pointers don't
 	// leak.
 	ctrConfig.Healthcheck = c.config.HealthCheckConfig
@@ -467,6 +467,9 @@ func (c *Container) generateInspectContainerHostConfig(ctrSpec *spec.Spec, named
 
 	restartPolicy := new(define.InspectRestartPolicy)
 	restartPolicy.Name = c.config.RestartPolicy
+	if restartPolicy.Name == "" {
+		restartPolicy.Name = define.RestartPolicyNo
+	}
 	restartPolicy.MaximumRetryCount = c.config.RestartRetries
 	hostConfig.RestartPolicy = restartPolicy
 	if c.config.NoCgroups {
@@ -506,6 +509,10 @@ func (c *Container) generateInspectContainerHostConfig(ctrSpec *spec.Spec, named
 
 	// Annotations
 	if ctrSpec.Annotations != nil {
+		if len(ctrSpec.Annotations) != 0 {
+			hostConfig.Annotations = ctrSpec.Annotations
+		}
+
 		hostConfig.ContainerIDFile = ctrSpec.Annotations[define.InspectAnnotationCIDFile]
 		if ctrSpec.Annotations[define.InspectAnnotationAutoremove] == define.InspectResponseTrue {
 			hostConfig.AutoRemove = true

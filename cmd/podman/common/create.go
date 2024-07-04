@@ -1,8 +1,6 @@
 package common
 
 import (
-	"os"
-
 	"github.com/containers/common/pkg/auth"
 	"github.com/containers/common/pkg/completion"
 	commonFlag "github.com/containers/common/pkg/flag"
@@ -396,6 +394,13 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		)
 		_ = cmd.RegisterFlagCompletionFunc(requiresFlagName, AutocompleteContainers)
 
+		retryFlagName := "retry"
+		createFlags.Uint(retryFlagName, registry.RetryDefault(), "number of times to retry in case of failure when performing pull")
+		_ = cmd.RegisterFlagCompletionFunc(retryFlagName, completion.AutocompleteNone)
+		retryDelayFlagName := "retry-delay"
+		createFlags.String(retryDelayFlagName, registry.RetryDelayDefault(), "delay between retries in case of pull failures")
+		_ = cmd.RegisterFlagCompletionFunc(retryDelayFlagName, completion.AutocompleteNone)
+
 		createFlags.BoolVar(
 			&cf.Rm,
 			"rm", false,
@@ -411,7 +416,7 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 		createFlags.StringVar(
 			&cf.SdNotifyMode,
 			sdnotifyFlagName, cf.SdNotifyMode,
-			`control sd-notify behavior ("container"|"conmon"|"ignore")`,
+			`control sd-notify behavior ("container"|"conmon"|"healthy"|"ignore")`,
 		)
 		_ = cmd.RegisterFlagCompletionFunc(sdnotifyFlagName, AutocompleteSDNotify)
 
@@ -636,7 +641,8 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 			`If a container with the same name exists, replace it`,
 		)
 	}
-	if mode == entities.InfraMode || (mode == entities.CreateMode) { // infra container flags, create should also pick these up
+	// Restart is allowed for created, updated, and infra ctr
+	if mode == entities.InfraMode || mode == entities.CreateMode || mode == entities.UpdateMode {
 		restartFlagName := "restart"
 		createFlags.StringVar(
 			&cf.Restart,
@@ -644,7 +650,8 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 			`Restart policy to apply when a container exits ("always"|"no"|"never"|"on-failure"|"unless-stopped")`,
 		)
 		_ = cmd.RegisterFlagCompletionFunc(restartFlagName, AutocompleteRestartOption)
-
+	}
+	if mode == entities.InfraMode || (mode == entities.CreateMode) { // infra container flags, create should also pick these up
 		shmSizeFlagName := "shm-size"
 		createFlags.String(
 			shmSizeFlagName, shmSize(),
@@ -714,7 +721,7 @@ func DefineCreateFlags(cmd *cobra.Command, cf *entities.ContainerCreateOptions, 
 
 		usernsFlagName := "userns"
 		createFlags.String(
-			usernsFlagName, os.Getenv("PODMAN_USERNS"),
+			usernsFlagName, "",
 			"User namespace to use",
 		)
 		_ = cmd.RegisterFlagCompletionFunc(usernsFlagName, AutocompleteUserNamespace)

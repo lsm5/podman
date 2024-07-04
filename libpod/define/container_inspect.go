@@ -1,9 +1,13 @@
 package define
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/containers/image/v5/manifest"
+	"github.com/containers/podman/v5/pkg/signal"
 )
 
 type InspectIDMappings struct {
@@ -44,7 +48,7 @@ type InspectContainerConfig struct {
 	// Container working directory
 	WorkingDir string `json:"WorkingDir"`
 	// Container entrypoint
-	Entrypoint string `json:"Entrypoint"`
+	Entrypoint []string `json:"Entrypoint"`
 	// On-build arguments - presently unused. More of Buildah's domain.
 	OnBuild *string `json:"OnBuild"`
 	// Container labels
@@ -52,7 +56,7 @@ type InspectContainerConfig struct {
 	// Container annotations
 	Annotations map[string]string `json:"Annotations"`
 	// Container stop signal
-	StopSignal uint `json:"StopSignal"`
+	StopSignal string `json:"StopSignal"`
 	// Configured healthcheck for the container
 	Healthcheck *manifest.Schema2HealthConfig `json:"Healthcheck,omitempty"`
 	// HealthcheckOnFailureAction defines an action to take once the container turns unhealthy.
@@ -85,6 +89,77 @@ type InspectContainerConfig struct {
 	SdNotifyMode string `json:"sdNotifyMode,omitempty"`
 	// SdNotifySocket is the NOTIFY_SOCKET in use by/configured for the container.
 	SdNotifySocket string `json:"sdNotifySocket,omitempty"`
+
+	// V4PodmanCompatMarshal indicates that the json marshaller should
+	// use the old v4 inspect format to keep API compatibility.
+	V4PodmanCompatMarshal bool `json:"-"`
+}
+
+// UnmarshalJSON allow compatibility with podman V4 API
+func (insp *InspectContainerConfig) UnmarshalJSON(data []byte) error {
+	type Alias InspectContainerConfig
+	aux := &struct {
+		Entrypoint interface{} `json:"Entrypoint"`
+		StopSignal interface{} `json:"StopSignal"`
+		*Alias
+	}{
+		Alias: (*Alias)(insp),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	switch entrypoint := aux.Entrypoint.(type) {
+	case string:
+		insp.Entrypoint = strings.Split(entrypoint, " ")
+	case []string:
+		insp.Entrypoint = entrypoint
+	case []interface{}:
+		insp.Entrypoint = []string{}
+		for _, entry := range entrypoint {
+			if str, ok := entry.(string); ok {
+				insp.Entrypoint = append(insp.Entrypoint, str)
+			}
+		}
+	case nil:
+		insp.Entrypoint = []string{}
+	default:
+		return fmt.Errorf("cannot unmarshal Config.Entrypoint of type  %T", entrypoint)
+	}
+
+	switch stopsignal := aux.StopSignal.(type) {
+	case string:
+		insp.StopSignal = stopsignal
+	case float64:
+		insp.StopSignal = signal.ToDockerFormat(uint(stopsignal))
+	case nil:
+		break
+	default:
+		return fmt.Errorf("cannot unmarshal Config.StopSignal of type  %T", stopsignal)
+	}
+	return nil
+}
+
+func (insp *InspectContainerConfig) MarshalJSON() ([]byte, error) {
+	// the alias is needed otherwise MarshalJSON will
+	type Alias InspectContainerConfig
+	conf := (*Alias)(insp)
+	if !insp.V4PodmanCompatMarshal {
+		return json.Marshal(conf)
+	}
+
+	type v4InspectContainerConfig struct {
+		Entrypoint string `json:"Entrypoint"`
+		StopSignal uint   `json:"StopSignal"`
+		*Alias
+	}
+	stopSignal, _ := signal.ParseSignal(insp.StopSignal)
+	newConf := &v4InspectContainerConfig{
+		Entrypoint: strings.Join(insp.Entrypoint, " "),
+		StopSignal: uint(stopSignal),
+		Alias:      conf,
+	}
+	return json.Marshal(newConf)
 }
 
 // InspectRestartPolicy holds information about the container's restart policy.
@@ -315,6 +390,9 @@ type InspectContainerHostConfig struct {
 	// It is not handled directly within libpod and is stored in an
 	// annotation.
 	AutoRemove bool `json:"AutoRemove"`
+	// Annotations are provided to the runtime when the container is
+	// started.
+	Annotations map[string]string `json:"Annotations"`
 	// VolumeDriver is presently unused and is retained for Docker
 	// compatibility.
 	VolumeDriver string `json:"VolumeDriver"`

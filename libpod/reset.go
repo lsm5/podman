@@ -11,6 +11,7 @@ import (
 
 	"github.com/containers/common/libimage"
 	"github.com/containers/common/libnetwork/types"
+	blobinfocache "github.com/containers/image/v5/pkg/blobinfocache"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/errorhandling"
 	"github.com/containers/podman/v5/pkg/util"
@@ -108,13 +109,13 @@ func (r *Runtime) Reset(ctx context.Context) error {
 		return define.ErrRuntimeStopped
 	}
 
-	var timeout *uint
+	var timeout uint = 0
 	pods, err := r.GetAllPods()
 	if err != nil {
 		return err
 	}
 	for _, p := range pods {
-		if ctrs, err := r.RemovePod(ctx, p, true, true, timeout); err != nil {
+		if ctrs, err := r.RemovePod(ctx, p, true, true, &timeout); err != nil {
 			if errors.Is(err, define.ErrNoSuchPod) {
 				continue
 			}
@@ -133,7 +134,7 @@ func (r *Runtime) Reset(ctx context.Context) error {
 	}
 
 	for _, c := range ctrs {
-		if ctrs, _, err := r.RemoveContainerAndDependencies(ctx, c, true, true, timeout); err != nil {
+		if ctrs, _, err := r.RemoveContainerAndDependencies(ctx, c, true, true, &timeout); err != nil {
 			for ctr, err := range ctrs {
 				logrus.Errorf("Error removing container %s: %v", ctr, err)
 			}
@@ -163,7 +164,7 @@ func (r *Runtime) Reset(ctx context.Context) error {
 		return err
 	}
 	for _, v := range volumes {
-		if err := r.RemoveVolume(ctx, v, true, timeout); err != nil {
+		if err := r.RemoveVolume(ctx, v, true, &timeout); err != nil {
 			if errors.Is(err, define.ErrNoSuchVolume) {
 				continue
 			}
@@ -257,6 +258,14 @@ func (r *Runtime) Reset(ctx context.Context) error {
 			prevError = err
 		}
 	}
+
+	if err := blobinfocache.CleanupDefaultCache(nil); err != nil {
+		if prevError != nil {
+			logrus.Error(prevError)
+		}
+		prevError = err
+	}
+
 	if storageConfPath, err := storage.DefaultConfigFile(); err == nil {
 		switch storageConfPath {
 		case stypes.SystemConfigFile:

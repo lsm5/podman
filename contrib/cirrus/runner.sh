@@ -21,19 +21,11 @@ source $(dirname $0)/lib.sh
 
 showrun echo "starting"
 
-function _run_validate() {
-    # TODO: aarch64 images need python3-devel installed
-    # https://github.com/containers/automation_images/issues/159
-    showrun bigto ooe.sh dnf install -y python3-devel
+function _run_validate-source() {
+    showrun make validate-source
 
-    # git-validation tool fails if $EPOCH_TEST_COMMIT is empty
-    # shellcheck disable=SC2154
-    if [[ -n "$EPOCH_TEST_COMMIT" ]]; then
-        showrun make validate
-    else
-        warn "Skipping git-validation since \$EPOCH_TEST_COMMIT is empty"
-    fi
-
+    # make sure PRs have tests
+    showrun make tests-included
 }
 
 function _run_unit() {
@@ -57,12 +49,6 @@ function _run_apiv2() {
     ) |& logformatter
 }
 
-function _run_compose() {
-    _bail_if_test_can_be_skipped test/compose
-
-    showrun ./test/compose/test-compose |& logformatter
-}
-
 function _run_compose_v2() {
     _bail_if_test_can_be_skipped test/compose
 
@@ -70,14 +56,10 @@ function _run_compose_v2() {
 }
 
 function _run_int() {
-    _bail_if_test_can_be_skipped test/e2e
-
     dotest integration
 }
 
 function _run_sys() {
-    _bail_if_test_can_be_skipped test/system
-
     dotest system
 }
 
@@ -88,17 +70,12 @@ function _run_upgrade_test() {
 }
 
 function _run_bud() {
-    _bail_if_test_can_be_skipped test/buildah-bud
-
     showrun ./test/buildah-bud/run-buildah-bud-tests |& logformatter
 }
 
 function _run_bindings() {
     # install ginkgo
     showrun make .install.ginkgo
-
-    # shellcheck disable=SC2155
-    export PATH=$PATH:$GOSRC/hack:$GOSRC/test/tools/build
 
     # if logformatter sees this, it can link directly to failing source lines
     local gitcommit_magic=
@@ -155,7 +132,8 @@ exec_container() {
     set -x
     # shellcheck disable=SC2154
     exec bin/podman run --rm --privileged --net=host --cgroupns=host \
-        -v `mktemp -d -p /var/tmp`:/tmp:Z \
+        -v `mktemp -d -p /var/tmp`:/var/tmp:Z \
+        --tmpfs /tmp:mode=1777 \
         -v /dev/fuse:/dev/fuse \
         -v "$GOPATH:$GOPATH:Z" \
         --workdir "$GOSRC" \
@@ -170,9 +148,6 @@ function _run_swagger() {
     local download_url
     local envvarsfile
     req_env_vars GCPJSON GCPNAME GCPPROJECT CTR_FQIN
-
-    [[ -x /usr/local/bin/swagger ]] || \
-        die "Expecting swagger binary to be present and executable."
 
     # The filename and bucket depend on the automation context
     #shellcheck disable=SC2154,SC2153
@@ -226,10 +201,18 @@ eof
 }
 
 function _run_build() {
+    local vb_target
+
+    # There's no reason to validate-binaries across multiple linux platforms
+    # shellcheck disable=SC2154
+    if [[ "$DISTRO_NV" =~ $FEDORA_NAME ]]; then
+        vb_target=validate-binaries
+    fi
+
     # Ensure always start from clean-slate with all vendor modules downloaded
     showrun make clean
     showrun make vendor
-    showrun make podman-release  # includes podman, podman-remote, and docs
+    showrun make podman-release $vb_target # includes podman, podman-remote, and docs
 
     # Last-minute confirmation that we're testing the desired runtime.
     # This Can't Possibly Fail™ in regular CI; only when updating VMs.
@@ -260,6 +243,10 @@ function _run_altbuild() {
     cd $GOSRC
     case "$ALT_NAME" in
         *Each*)
+            if [[ -z "$CIRRUS_PR" ]]; then
+                echo ".....only meaningful on PRs"
+                return
+            fi
             showrun git fetch origin
             # The make-and-check-size script, introduced 2022-03-22 in #13518,
             # runs 'make' (the original purpose of this check) against
@@ -271,7 +258,8 @@ function _run_altbuild() {
             context_dir=$(mktemp -d --tmpdir make-size-check.XXXXXXX)
             savedhead=$(git rev-parse HEAD)
             # Push to PR base. First run of the script will write size files
-            pr_base=$(git merge-base origin/$DEST_BRANCH HEAD)
+            # shellcheck disable=SC2154
+            pr_base=$PR_BASE_SHA
             showrun git checkout $pr_base
             showrun hack/make-and-check-size $context_dir
             # pop back to PR, and run incremental makes. Subsequent script
@@ -281,7 +269,8 @@ function _run_altbuild() {
             rm -rf $context_dir
             ;;
         *Windows*)
-            showrun make lint GOOS=windows || true  # TODO: Enable when code passes check
+	    showrun make .install.pre-commit
+            showrun make lint GOOS=windows CGO_ENABLED=0
             showrun make podman-remote-release-windows_amd64.zip
             ;;
         *RPM*)
@@ -421,12 +410,27 @@ dotest() {
         die "Found fallback podman '$fallback_podman' in \$PATH; tests require none, as a guarantee that we're testing the right binary."
     fi
 
+    # Catch invalid "TMPDIR == /tmp" assumptions; PR #19281
+    TMPDIR=$(mktemp --tmpdir -d CI_XXXX)
+    # tmp dir is commonly 1777 to allow all user to read/write
+    chmod 1777 $TMPDIR
+    export TMPDIR
+    fstype=$(findmnt -n -o FSTYPE --target $TMPDIR)
+    if [[ "$fstype" != "tmpfs" ]]; then
+        die "The CI test TMPDIR is not on a tmpfs mount, we need tmpfs to make the tests faster"
+    fi
+
     showrun make ${localremote}${testsuite} PODMAN_SERVER_LOG=$PODMAN_SERVER_LOG \
         |& logformatter
+
+    # FIXME: https://github.com/containers/podman/issues/22642
+    # Cannot delete this due cleanup errors, as the VM is basically
+    # done after this anyway let's not block on this for now.
+    # rm -rf $TMPDIR
+    # unset TMPDIR
 }
 
 _run_machine-linux() {
-    # N/B: Can't use _bail_if_test_can_be_skipped here b/c content isn't under test/
     showrun make localmachine |& logformatter
 }
 
@@ -453,7 +457,9 @@ function _bail_if_test_can_be_skipped() {
     # Defined by Cirrus-CI for all tasks
     # shellcheck disable=SC2154
     head=$CIRRUS_CHANGE_IN_REPO
-    base=$(git merge-base $DEST_BRANCH $head)
+    # shellcheck disable=SC2154
+    base=$PR_BASE_SHA
+    echo "_bail_if_test_can_be_skipped: head=$head  base=$base"
     diffs=$(git diff --name-only $base $head)
 
     # If PR touches any files in an argument directory, we cannot skip

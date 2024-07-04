@@ -11,17 +11,6 @@ import (
 )
 
 var _ = Describe("podman machine info", func() {
-	var (
-		mb      *machineTestBuilder
-		testDir string
-	)
-
-	BeforeEach(func() {
-		testDir, mb = setup()
-	})
-	AfterEach(func() {
-		teardown(originalHomeDir, testDir, mb)
-	})
 
 	It("machine info", func() {
 		info := new(infoMachine)
@@ -39,7 +28,7 @@ var _ = Describe("podman machine info", func() {
 
 		// Create a machine and check if info has been updated
 		i := new(initMachine)
-		initSession, err := mb.setCmd(i.withImagePath(mb.imagePath)).run()
+		initSession, err := mb.setCmd(i.withImage(mb.imagePath)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(initSession).To(Exit(0))
 

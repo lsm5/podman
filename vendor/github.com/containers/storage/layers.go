@@ -181,6 +181,13 @@ type DiffOptions struct {
 	Compression *archive.Compression
 }
 
+// stagedLayerOptions are the options passed to .create to populate a staged
+// layer
+type stagedLayerOptions struct {
+	DiffOutput  *drivers.DriverWithDifferOutput
+	DiffOptions *drivers.ApplyDiffWithDifferOpts
+}
+
 // roLayerStore wraps a graph driver, adding the ability to refer to layers by
 // name, and keeping track of parent-child relationships, along with a list of
 // all known layers.
@@ -267,7 +274,7 @@ type rwLayerStore interface {
 	// underlying drivers do not themselves distinguish between writeable
 	// and read-only layers.  Returns the new layer structure and the size of the
 	// diff which was applied to its parent to initialize its contents.
-	create(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, diff io.Reader) (*Layer, int64, error)
+	create(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, diff io.Reader, slo *stagedLayerOptions) (*Layer, int64, error)
 
 	// updateNames modifies names associated with a layer based on (op, names).
 	updateNames(id string, names []string, op updateNameOperation) error
@@ -312,8 +319,8 @@ type rwLayerStore interface {
 	// CleanupStagingDirectory cleanups the staging directory.  It can be used to cleanup the staging directory on errors
 	CleanupStagingDirectory(stagingDirectory string) error
 
-	// ApplyDiffFromStagingDirectory uses stagingDirectory to create the diff.
-	ApplyDiffFromStagingDirectory(id, stagingDirectory string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffWithDifferOpts) error
+	// applyDiffFromStagingDirectory uses diffOutput.Target to create the diff.
+	applyDiffFromStagingDirectory(id string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffWithDifferOpts) error
 
 	// DifferTarget gets the location where files are stored for the layer.
 	DifferTarget(id string) (string, error)
@@ -327,10 +334,71 @@ type rwLayerStore interface {
 	GarbageCollect() error
 }
 
+type multipleLockFile struct {
+	lockfiles []*lockfile.LockFile
+}
+
+func (l multipleLockFile) Lock() {
+	for _, lock := range l.lockfiles {
+		lock.Lock()
+	}
+}
+
+func (l multipleLockFile) RLock() {
+	for _, lock := range l.lockfiles {
+		lock.RLock()
+	}
+}
+
+func (l multipleLockFile) Unlock() {
+	for _, lock := range l.lockfiles {
+		lock.Unlock()
+	}
+}
+
+func (l multipleLockFile) ModifiedSince(lastWrite lockfile.LastWrite) (lockfile.LastWrite, bool, error) {
+	// Look up only the first lockfile, since this is the value returned by RecordWrite().
+	return l.lockfiles[0].ModifiedSince(lastWrite)
+}
+
+func (l multipleLockFile) AssertLockedForWriting() {
+	for _, lock := range l.lockfiles {
+		lock.AssertLockedForWriting()
+	}
+}
+
+func (l multipleLockFile) GetLastWrite() (lockfile.LastWrite, error) {
+	return l.lockfiles[0].GetLastWrite()
+}
+
+func (l multipleLockFile) RecordWrite() (lockfile.LastWrite, error) {
+	var lastWrite *lockfile.LastWrite
+	for _, lock := range l.lockfiles {
+		lw, err := lock.RecordWrite()
+		if err != nil {
+			return lw, err
+		}
+		// Return the first value we get so we know that
+		// all the locks have a write time >= to this one.
+		if lastWrite == nil {
+			lastWrite = &lw
+		}
+	}
+	return *lastWrite, nil
+}
+
+func (l multipleLockFile) IsReadWrite() bool {
+	return l.lockfiles[0].IsReadWrite()
+}
+
+func newMultipleLockFile(l ...*lockfile.LockFile) *multipleLockFile {
+	return &multipleLockFile{lockfiles: l}
+}
+
 type layerStore struct {
 	// The following fields are only set when constructing layerStore, and must never be modified afterwards.
 	// They are safe to access without any other locking.
-	lockfile       *lockfile.LockFile // lockfile.IsReadWrite can be used to distinguish between read-write and read-only layer stores.
+	lockfile       *multipleLockFile  // lockfile.IsReadWrite can be used to distinguish between read-write and read-only layer stores.
 	mountsLockfile *lockfile.LockFile // Can _only_ be obtained with inProcessLock held.
 	rundir         string
 	jsonPath       [numLayerLocationIndex]string
@@ -1016,22 +1084,37 @@ func (r *layerStore) saveMounts() error {
 	return r.loadMounts()
 }
 
-func (s *store) newLayerStore(rundir string, layerdir string, driver drivers.Driver, transient bool) (rwLayerStore, error) {
+func (s *store) newLayerStore(rundir, layerdir, imagedir string, driver drivers.Driver, transient bool) (rwLayerStore, error) {
 	if err := os.MkdirAll(rundir, 0o700); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(layerdir, 0o700); err != nil {
 		return nil, err
 	}
+	if imagedir != "" {
+		if err := os.MkdirAll(imagedir, 0o700); err != nil {
+			return nil, err
+		}
+	}
 	// Note: While the containers.lock file is in rundir for transient stores
 	// we don't want to do this here, because the non-transient layers in
 	// layers.json might be used externally as a read-only layer (using e.g.
 	// additionalimagestores), and that would look for the lockfile in the
 	// same directory
+	var lockFiles []*lockfile.LockFile
 	lockFile, err := lockfile.GetLockFile(filepath.Join(layerdir, "layers.lock"))
 	if err != nil {
 		return nil, err
 	}
+	lockFiles = append(lockFiles, lockFile)
+	if imagedir != "" {
+		lockFile, err := lockfile.GetLockFile(filepath.Join(imagedir, "layers.lock"))
+		if err != nil {
+			return nil, err
+		}
+		lockFiles = append(lockFiles, lockFile)
+	}
+
 	mountsLockfile, err := lockfile.GetLockFile(filepath.Join(rundir, "mountpoints.lock"))
 	if err != nil {
 		return nil, err
@@ -1041,7 +1124,7 @@ func (s *store) newLayerStore(rundir string, layerdir string, driver drivers.Dri
 		volatileDir = rundir
 	}
 	rlstore := layerStore{
-		lockfile:       lockFile,
+		lockfile:       newMultipleLockFile(lockFiles...),
 		mountsLockfile: mountsLockfile,
 		rundir:         rundir,
 		jsonPath: [numLayerLocationIndex]string{
@@ -1078,7 +1161,7 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roL
 		return nil, err
 	}
 	rlstore := layerStore{
-		lockfile:       lockfile,
+		lockfile:       newMultipleLockFile(lockfile),
 		mountsLockfile: nil,
 		rundir:         rundir,
 		jsonPath: [numLayerLocationIndex]string{
@@ -1232,7 +1315,7 @@ func (r *layerStore) PutAdditionalLayer(id string, parentLayer *Layer, names []s
 }
 
 // Requires startWriting.
-func (r *layerStore) create(id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, diff io.Reader) (layer *Layer, size int64, err error) {
+func (r *layerStore) create(id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, diff io.Reader, slo *stagedLayerOptions) (layer *Layer, size int64, err error) {
 	if moreOptions == nil {
 		moreOptions = &LayerOptions{}
 	}
@@ -1424,6 +1507,11 @@ func (r *layerStore) create(id string, parentLayer *Layer, names []string, mount
 	if diff != nil {
 		if size, err = r.applyDiffWithOptions(layer.ID, moreOptions, diff); err != nil {
 			cleanupFailureContext = "applying layer diff"
+			return nil, -1, err
+		}
+	} else if slo != nil {
+		if err := r.applyDiffFromStagingDirectory(layer.ID, slo.DiffOutput, slo.DiffOptions); err != nil {
+			cleanupFailureContext = "applying staged directory diff"
 			return nil, -1, err
 		}
 	} else {
@@ -2286,7 +2374,7 @@ func (r *layerStore) applyDiffWithOptions(to string, layerOptions *LayerOptions,
 	if layerOptions != nil && layerOptions.UncompressedDigest != "" &&
 		layerOptions.UncompressedDigest.Algorithm() == digest.Canonical {
 		uncompressedDigest = layerOptions.UncompressedDigest
-	} else {
+	} else if compression != archive.Uncompressed {
 		uncompressedDigester = digest.Canonical.Digester()
 	}
 
@@ -2365,10 +2453,17 @@ func (r *layerStore) applyDiffWithOptions(to string, layerOptions *LayerOptions,
 	if uncompressedDigester != nil {
 		uncompressedDigest = uncompressedDigester.Digest()
 	}
+	if uncompressedDigest == "" && compression == archive.Uncompressed {
+		uncompressedDigest = compressedDigest
+	}
 
 	updateDigestMap(&r.bycompressedsum, layer.CompressedDigest, compressedDigest, layer.ID)
 	layer.CompressedDigest = compressedDigest
-	layer.CompressedSize = compressedCounter.Count
+	if layerOptions != nil && layerOptions.OriginalDigest != "" && layerOptions.OriginalSize != nil {
+		layer.CompressedSize = *layerOptions.OriginalSize
+	} else {
+		layer.CompressedSize = compressedCounter.Count
+	}
 	updateDigestMap(&r.byuncompressedsum, layer.UncompressedDigest, uncompressedDigest, layer.ID)
 	layer.UncompressedDigest = uncompressedDigest
 	layer.UncompressedSize = uncompressedCounter.Count
@@ -2407,7 +2502,7 @@ func (r *layerStore) DifferTarget(id string) (string, error) {
 }
 
 // Requires startWriting.
-func (r *layerStore) ApplyDiffFromStagingDirectory(id, stagingDirectory string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffWithDifferOpts) error {
+func (r *layerStore) applyDiffFromStagingDirectory(id string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffWithDifferOpts) error {
 	ddriver, ok := r.driver.(drivers.DriverWithDiffer)
 	if !ok {
 		return ErrNotSupported
@@ -2426,7 +2521,7 @@ func (r *layerStore) ApplyDiffFromStagingDirectory(id, stagingDirectory string, 
 		}
 	}
 
-	err := ddriver.ApplyDiffFromStagingDirectory(layer.ID, layer.Parent, stagingDirectory, diffOutput, options)
+	err := ddriver.ApplyDiffFromStagingDirectory(layer.ID, layer.Parent, diffOutput, options)
 	if err != nil {
 		return err
 	}
@@ -2446,6 +2541,10 @@ func (r *layerStore) ApplyDiffFromStagingDirectory(id, stagingDirectory string, 
 			layer.Flags[k] = v
 		}
 	}
+	if err = r.saveFor(layer); err != nil {
+		return err
+	}
+
 	if len(diffOutput.TarSplit) != 0 {
 		tsdata := bytes.Buffer{}
 		compressor, err := pgzip.NewWriterLevel(&tsdata, pgzip.BestSpeed)
@@ -2474,9 +2573,6 @@ func (r *layerStore) ApplyDiffFromStagingDirectory(id, stagingDirectory string, 
 			}
 			return err
 		}
-	}
-	if err = r.saveFor(layer); err != nil {
-		return err
 	}
 	return err
 }

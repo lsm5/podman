@@ -11,8 +11,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	metadata "github.com/checkpoint-restore/checkpointctl/lib"
@@ -38,6 +41,7 @@ import (
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/chrootarchive"
+	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/idmap"
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/containers/storage/pkg/lockfile"
@@ -48,7 +52,6 @@ import (
 	"github.com/opencontainers/runtime-tools/generate"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/exp/slices"
 	"golang.org/x/sys/unix"
 )
 
@@ -204,7 +207,7 @@ func (c *Container) handleExitFile(exitFile string, fi os.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	if _, err = os.Stat(oomFilePath); err == nil {
+	if err = fileutils.Exists(oomFilePath); err == nil {
 		c.state.OOMKilled = true
 	}
 
@@ -271,7 +274,9 @@ func (c *Container) handleRestartPolicy(ctx context.Context) (_ bool, retErr err
 	}
 
 	if c.config.HealthCheckConfig != nil {
-		if err := c.removeTransientFiles(ctx, c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed); err != nil {
+		if err := c.removeTransientFiles(ctx,
+			c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+			c.state.HCUnitName); err != nil {
 			return false, err
 		}
 	}
@@ -301,27 +306,21 @@ func (c *Container) handleRestartPolicy(ctx context.Context) (_ bool, retErr err
 		}
 	}()
 
-	// Now this is a bit of a mess, normally we try to reuse the netns but if a userns
-	// is used this is not possible as it must be owned by the userns which is created
-	// by the oci runtime. Thus we need to teardown the netns so that the runtime
-	// creates the users+netns and then we setup in completeNetworkSetup() again.
-	if c.config.PostConfigureNetNS {
-		if err := c.cleanupNetwork(); err != nil {
-			return false, err
-		}
+	// Always teardown the network, trying to reuse the netns has caused
+	// a significant amount of bugs in this code here. It also never worked
+	// for containers with user namespaces. So once and for all simplify this
+	// by never reusing the netns. Originally this was done to have a faster
+	// restart of containers but with netavark now we are much faster so it
+	// shouldn't be that noticeable in practice. It also makes more sense to
+	// reconfigure the netns as it is likely that the container exited due
+	// some broken network state in which case reusing would just cause more
+	// harm than good.
+	if err := c.cleanupNetwork(); err != nil {
+		return false, err
 	}
 
 	if err := c.prepare(); err != nil {
 		return false, err
-	}
-
-	// only do this if the container is not in a userns, if we are the cleanupNetwork()
-	// was called above and a proper network setup is needed which is part of the init() below.
-	if !c.config.PostConfigureNetNS {
-		// set up slirp4netns again because slirp4netns will die when conmon exits
-		if err := c.setupRootlessNetwork(); err != nil {
-			return false, err
-		}
 	}
 
 	if c.state.State == define.ContainerStateStopped {
@@ -335,10 +334,10 @@ func (c *Container) handleRestartPolicy(ctx context.Context) (_ bool, retErr err
 			return false, err
 		}
 	}
-	if err := c.start(ctx); err != nil {
+	if err := c.start(); err != nil {
 		return false, err
 	}
-	return true, nil
+	return true, c.waitForHealthy(ctx)
 }
 
 // Ensure that the container is in a specific state or state.
@@ -547,16 +546,6 @@ func (c *Container) setupStorage(ctx context.Context) error {
 	c.config.StaticDir = containerInfo.Dir
 	c.state.RunDir = containerInfo.RunDir
 
-	if len(c.config.IDMappings.UIDMap) != 0 || len(c.config.IDMappings.GIDMap) != 0 {
-		if err := idtools.SafeChown(containerInfo.RunDir, c.RootUID(), c.RootGID()); err != nil {
-			return err
-		}
-
-		if err := idtools.SafeChown(containerInfo.Dir, c.RootUID(), c.RootGID()); err != nil {
-			return err
-		}
-	}
-
 	// Set the default Entrypoint and Command
 	if containerInfo.Config != nil {
 		// Set CMD in the container to the default configuration only if ENTRYPOINT is not set by the user.
@@ -666,6 +655,7 @@ func resetContainerState(state *ContainerState) {
 	state.StartupHCPassed = false
 	state.StartupHCSuccessCount = 0
 	state.StartupHCFailureCount = 0
+	state.HCUnitName = ""
 	state.NetNS = ""
 	state.NetworkStatus = nil
 }
@@ -1212,7 +1202,7 @@ func (c *Container) reinit(ctx context.Context, retainRetries bool) error {
 
 // Initialize (if necessary) and start a container
 // Performs all necessary steps to start a container that is not running
-// Does not lock or check validity
+// Does not lock or check validity, requires to run on the same thread that holds the lock for the container.
 func (c *Container) initAndStart(ctx context.Context) (retErr error) {
 	// If we are ContainerStateUnknown, throw an error
 	if c.state.State == define.ContainerStateUnknown {
@@ -1257,11 +1247,14 @@ func (c *Container) initAndStart(ctx context.Context) (retErr error) {
 	}
 
 	// Now start the container
-	return c.start(ctx)
+	if err := c.start(); err != nil {
+		return err
+	}
+	return c.waitForHealthy(ctx)
 }
 
 // Internal, non-locking function to start a container
-func (c *Container) start(ctx context.Context) error {
+func (c *Container) start() error {
 	if c.config.Spec.Process != nil {
 		logrus.Debugf("Starting container %s with command %v", c.ID(), c.config.Spec.Process.Args)
 	}
@@ -1302,10 +1295,14 @@ func (c *Container) start(ctx context.Context) error {
 
 	c.newContainerEvent(events.Start)
 
-	if err := c.save(); err != nil {
-		return err
-	}
+	return c.save()
+}
 
+// waitForHealthy, when sdNotifyMode == SdNotifyModeHealthy, waits up to the DefaultWaitInterval
+// for the container to get into the healthy state and reports the status to the notify socket.
+// The function unlocks the container lock, so it must be called from the same thread that locks
+// the container.
+func (c *Container) waitForHealthy(ctx context.Context) error {
 	if c.config.SdNotifyMode != define.SdNotifyModeHealthy {
 		return nil
 	}
@@ -1319,6 +1316,9 @@ func (c *Container) start(ctx context.Context) error {
 	}
 
 	if _, err := c.WaitForConditionWithInterval(ctx, DefaultWaitInterval, define.HealthCheckHealthy); err != nil {
+		if errors.Is(err, define.ErrNoSuchCtr) {
+			return nil
+		}
 		return err
 	}
 
@@ -1330,10 +1330,8 @@ func (c *Container) start(ctx context.Context) error {
 	return nil
 }
 
-// Internal, non-locking function to stop container
-func (c *Container) stop(timeout uint) error {
-	logrus.Debugf("Stopping ctr %s (timeout %d)", c.ID(), timeout)
-
+// Whether a container should use `all` when stopping
+func (c *Container) stopWithAll() (bool, error) {
 	// If the container is running in a PID Namespace, then killing the
 	// primary pid is enough to kill the container.  If it is not running in
 	// a pid namespace then the OCI Runtime needs to kill ALL processes in
@@ -1349,12 +1347,24 @@ func (c *Container) stop(timeout uint) error {
 			// Only do this check if we need to
 			unified, err := cgroups.IsCgroup2UnifiedMode()
 			if err != nil {
-				return err
+				return false, err
 			}
 			if !unified {
 				all = false
 			}
 		}
+	}
+
+	return all, nil
+}
+
+// Internal, non-locking function to stop container
+func (c *Container) stop(timeout uint) error {
+	logrus.Debugf("Stopping ctr %s (timeout %d)", c.ID(), timeout)
+
+	all, err := c.stopWithAll()
+	if err != nil {
+		return err
 	}
 
 	// OK, the following code looks a bit weird but we have to make sure we can stop
@@ -1446,6 +1456,58 @@ func (c *Container) waitForConmonToExitAndSave() error {
 			return err
 		}
 
+		// If we are still ContainerStateStopping, conmon exited without
+		// creating an exit file. Let's try and handle that here.
+		if c.state.State == define.ContainerStateStopping {
+			// Is container PID1 still alive?
+			if err := unix.Kill(c.state.PID, 0); err == nil {
+				// We have a runaway container, unmanaged by
+				// Conmon. Invoke OCI runtime stop.
+				// Use 0 timeout for immediate SIGKILL as things
+				// have gone seriously wrong.
+				// Ignore the error from stopWithAll, it's just
+				// a cgroup check - more important that we
+				// continue.
+				// If we wanted to be really fancy here, we
+				// could open a pidfd on container PID1 before
+				// this to get the real exit code... But I'm not
+				// that dedicated.
+				all, _ := c.stopWithAll()
+				if err := c.ociRuntime.StopContainer(c, 0, all); err != nil {
+					logrus.Errorf("Error stopping container %s after Conmon exited prematurely: %v", c.ID(), err)
+				}
+			}
+
+			// Conmon is dead. Handle it.
+			c.state.State = define.ContainerStateStopped
+			c.state.PID = 0
+			c.state.ConmonPID = 0
+			c.state.FinishedTime = time.Now()
+			c.state.ExitCode = -1
+			c.state.Exited = true
+
+			c.state.Error = "conmon died without writing exit file, container exit code could not be retrieved"
+
+			c.newContainerExitedEvent(c.state.ExitCode)
+
+			if err := c.save(); err != nil {
+				logrus.Errorf("Error saving container %s state after Conmon exited prematurely: %v", c.ID(), err)
+			}
+
+			if err := c.runtime.state.AddContainerExitCode(c.ID(), c.state.ExitCode); err != nil {
+				logrus.Errorf("Error saving container %s exit code after Conmon exited prematurely: %v", c.ID(), err)
+			}
+
+			// No Conmon alive to trigger cleanup, and the calls in
+			// regular Podman are conditional on no errors.
+			// Need to clean up manually.
+			if err := c.cleanup(context.Background()); err != nil {
+				logrus.Errorf("Error cleaning up container %s after Conmon exited prematurely: %v", c.ID(), err)
+			}
+
+			return fmt.Errorf("container %s conmon exited prematurely, exit code could not be retrieved: %w", c.ID(), define.ErrInternal)
+		}
+
 		return c.save()
 	}
 
@@ -1508,6 +1570,7 @@ func (c *Container) unpause() error {
 }
 
 // Internal, non-locking function to restart a container
+// It requires to run on the same thread that holds the lock.
 func (c *Container) restartWithTimeout(ctx context.Context, timeout uint) (retErr error) {
 	if !c.ensureState(define.ContainerStateConfigured, define.ContainerStateCreated, define.ContainerStateRunning, define.ContainerStateStopped, define.ContainerStateExited) {
 		return fmt.Errorf("unable to restart a container in a paused or unknown state: %w", define.ErrCtrStateInvalid)
@@ -1516,31 +1579,15 @@ func (c *Container) restartWithTimeout(ctx context.Context, timeout uint) (retEr
 	c.newContainerEvent(events.Restart)
 
 	if c.state.State == define.ContainerStateRunning {
-		conmonPID := c.state.ConmonPID
 		if err := c.stop(timeout); err != nil {
 			return err
 		}
 
 		if c.config.HealthCheckConfig != nil {
-			if err := c.removeTransientFiles(context.Background(), c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed); err != nil {
+			if err := c.removeTransientFiles(context.Background(),
+				c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+				c.state.HCUnitName); err != nil {
 				logrus.Error(err.Error())
-			}
-		}
-		// Old versions of conmon have a bug where they create the exit file before
-		// closing open file descriptors causing a race condition when restarting
-		// containers with open ports since we cannot bind the ports as they're not
-		// yet closed by conmon.
-		//
-		// Killing the old conmon PID is ~okay since it forces the FDs of old conmons
-		// to be closed, while it's a NOP for newer versions which should have
-		// exited already.
-		if conmonPID != 0 {
-			// Ignore errors from FindProcess() as conmon could already have exited.
-			p, err := os.FindProcess(conmonPID)
-			if p != nil && err == nil {
-				if err = p.Kill(); err != nil {
-					logrus.Debugf("error killing conmon process: %v", err)
-				}
 			}
 		}
 		// Ensure we tear down the container network so it will be
@@ -1573,7 +1620,10 @@ func (c *Container) restartWithTimeout(ctx context.Context, timeout uint) (retEr
 			return err
 		}
 	}
-	return c.start(ctx)
+	if err := c.start(); err != nil {
+		return err
+	}
+	return c.waitForHealthy(ctx)
 }
 
 // mountStorage sets up the container's root filesystem
@@ -1847,6 +1897,7 @@ func (c *Container) mountNamedVolume(v *ContainerNamedVolume, mountpoint string)
 		// Set NeedsCopyUp to false since we are about to do first copy
 		// Do not copy second time.
 		vol.state.NeedsCopyUp = false
+		vol.state.CopiedUp = true
 		if err := vol.save(); err != nil {
 			return nil, err
 		}
@@ -1992,7 +2043,9 @@ func (c *Container) cleanup(ctx context.Context) error {
 
 	// Remove healthcheck unit/timer file if it execs
 	if c.config.HealthCheckConfig != nil {
-		if err := c.removeTransientFiles(ctx, c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed); err != nil {
+		if err := c.removeTransientFiles(ctx,
+			c.config.StartupHealthCheckConfig != nil && !c.state.StartupHCPassed,
+			c.state.HCUnitName); err != nil {
 			logrus.Errorf("Removing timer for container %s healthcheck: %v", c.ID(), err)
 		}
 	}
@@ -2005,7 +2058,7 @@ func (c *Container) cleanup(ctx context.Context) error {
 	// cleanup host entry if it is shared
 	if c.config.NetNsCtr != "" {
 		if hoststFile, ok := c.state.BindMounts[config.DefaultHostsFile]; ok {
-			if _, err := os.Stat(hoststFile); err == nil {
+			if err := fileutils.Exists(hoststFile); err == nil {
 				// we cannot use the dependency container lock due ABBA deadlocks
 				if lock, err := lockfile.GetLockFile(hoststFile); err == nil {
 					lock.Lock()
@@ -2226,7 +2279,7 @@ func (c *Container) saveSpec(spec *spec.Spec) error {
 	// Cannot guarantee some things, e.g. network namespaces, have the same
 	// paths
 	jsonPath := filepath.Join(c.bundlePath(), "config.json")
-	if _, err := os.Stat(jsonPath); err != nil {
+	if err := fileutils.Exists(jsonPath); err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("doing stat on container %s spec: %w", c.ID(), err)
 		}
@@ -2311,6 +2364,75 @@ func (c *Container) setupOCIHooks(ctx context.Context, config *spec.Spec) (map[s
 	return allHooks, nil
 }
 
+// getRootPathForOCI returns the root path to use for the OCI runtime.
+// If the current user is mapped in the container user namespace, then it returns
+// the container's mountpoint directly from the storage.
+// Otherwise, it returns an intermediate mountpoint that is accessible to anyone.
+func (c *Container) getRootPathForOCI() (string, error) {
+	if hasCurrentUserMapped(c) {
+		return c.state.Mountpoint, nil
+	}
+	return c.getIntermediateMountpointUser()
+}
+
+var (
+	intermediateMountPoint     string
+	intermediateMountPointErr  error
+	intermediateMountPointSync sync.Mutex
+)
+
+// getIntermediateMountpointUser returns a path that is accessible to everyone.  It must be on TMPDIR since
+// the runroot/tmpdir used by libpod are accessible only to the owner.
+// To avoid TOCTOU issues, the path must be owned by the current user's UID and GID.
+// The path can be used by different containers, so a mount must be created only in a private mount namespace.
+func (c *Container) recreateIntermediateMountpointUser() (string, error) {
+	uid := os.Geteuid()
+	gid := os.Getegid()
+	for i := 0; ; i++ {
+		tmpDir := os.Getenv("TMPDIR")
+		if tmpDir == "" {
+			tmpDir = "/tmp"
+		}
+		dir := filepath.Join(tmpDir, fmt.Sprintf("intermediate-mountpoint-%d.%d", rootless.GetRootlessUID(), i))
+		err := os.Mkdir(dir, 0755)
+		if err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return "", err
+			}
+			st, err2 := os.Stat(dir)
+			if err2 != nil {
+				return "", err
+			}
+			sys := st.Sys().(*syscall.Stat_t)
+			if !st.IsDir() || sys.Uid != uint32(uid) || sys.Gid != uint32(gid) {
+				continue
+			}
+		}
+		return dir, nil
+	}
+}
+
+// getIntermediateMountpointUser returns a path that is accessible to everyone.
+// To avoid TOCTOU issues, the path must be owned by the current user's UID and GID.
+// The path can be used by different containers, so a mount must be created only in a private mount namespace.
+func (c *Container) getIntermediateMountpointUser() (string, error) {
+	intermediateMountPointSync.Lock()
+	defer intermediateMountPointSync.Unlock()
+
+	if intermediateMountPoint == "" || fileutils.Exists(intermediateMountPoint) != nil {
+		return c.recreateIntermediateMountpointUser()
+	}
+
+	// update the timestamp to prevent systemd-tmpfiles from removing it
+	now := time.Now()
+	if err := os.Chtimes(intermediateMountPoint, now, now); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return c.recreateIntermediateMountpointUser()
+		}
+	}
+	return intermediateMountPoint, intermediateMountPointErr
+}
+
 // mount mounts the container's root filesystem
 func (c *Container) mount() (string, error) {
 	if c.state.State == define.ContainerStateRemoving {
@@ -2369,8 +2491,7 @@ func (c *Container) checkReadyForRemoval() error {
 
 // canWithPrevious return the stat of the preCheckPoint dir
 func (c *Container) canWithPrevious() error {
-	_, err := os.Stat(c.PreCheckPointPath())
-	return err
+	return fileutils.Exists(c.PreCheckPointPath())
 }
 
 // prepareCheckpointExport writes the config and spec to
@@ -2488,7 +2609,7 @@ func (c *Container) hasNamespace(namespace spec.LinuxNamespaceType) bool {
 	return false
 }
 
-// extractSecretToStorage copies a secret's data from the secrets manager to the container's static dir
+// extractSecretToCtrStorage copies a secret's data from the secrets manager to the container's static dir
 func (c *Container) extractSecretToCtrStorage(secr *ContainerSecret) error {
 	manager, err := c.runtime.SecretsManager()
 	if err != nil {
@@ -2520,11 +2641,77 @@ func (c *Container) extractSecretToCtrStorage(secr *ContainerSecret) error {
 	return nil
 }
 
-// update calls the ociRuntime update function to modify a cgroup config after container creation
-func (c *Container) update(resources *spec.LinuxResources) error {
-	if err := c.ociRuntime.UpdateContainer(c, resources); err != nil {
+// Update a container's resources or restart policy after creation.
+// At least one of resources or restartPolicy must not be nil.
+func (c *Container) update(resources *spec.LinuxResources, restartPolicy *string, restartRetries *uint) error {
+	if resources == nil && restartPolicy == nil {
+		return fmt.Errorf("must provide at least one of resources and restartPolicy to update a container: %w", define.ErrInvalidArg)
+	}
+	if restartRetries != nil && restartPolicy == nil {
+		return fmt.Errorf("must provide restart policy if updating restart retries: %w", define.ErrInvalidArg)
+	}
+
+	oldResources := c.config.Spec.Linux.Resources
+	oldRestart := c.config.RestartPolicy
+	oldRetries := c.config.RestartRetries
+
+	if restartPolicy != nil {
+		if err := define.ValidateRestartPolicy(*restartPolicy); err != nil {
+			return err
+		}
+
+		if restartRetries != nil {
+			if *restartPolicy != define.RestartPolicyOnFailure {
+				return fmt.Errorf("cannot set restart policy retries unless policy is on-failure: %w", define.ErrInvalidArg)
+			}
+		}
+
+		c.config.RestartPolicy = *restartPolicy
+		if restartRetries != nil {
+			c.config.RestartRetries = *restartRetries
+		} else {
+			c.config.RestartRetries = 0
+		}
+	}
+
+	if resources != nil {
+		if c.config.Spec.Linux == nil {
+			c.config.Spec.Linux = new(spec.Linux)
+		}
+		c.config.Spec.Linux.Resources = resources
+	}
+
+	if err := c.runtime.state.SafeRewriteContainerConfig(c, "", "", c.config); err != nil {
+		// Assume DB write failed, revert to old resources block
+		c.config.Spec.Linux.Resources = oldResources
+		c.config.RestartPolicy = oldRestart
+		c.config.RestartRetries = oldRetries
 		return err
 	}
+
+	if c.ensureState(define.ContainerStateCreated, define.ContainerStateRunning, define.ContainerStatePaused) && resources != nil {
+		// So `podman inspect` on running containers sources its OCI spec from disk.
+		// To keep inspect accurate we need to update the on-disk OCI spec.
+		onDiskSpec, err := c.specFromState()
+		if err != nil {
+			return fmt.Errorf("retrieving on-disk OCI spec to update: %w", err)
+		}
+		if onDiskSpec.Linux == nil {
+			onDiskSpec.Linux = new(spec.Linux)
+		}
+		onDiskSpec.Linux.Resources = resources
+		if err := c.saveSpec(onDiskSpec); err != nil {
+			logrus.Errorf("Unable to update container %s OCI spec - `podman inspect` may not be accurate until container is restarted: %v", c.ID(), err)
+		}
+
+		if err := c.ociRuntime.UpdateContainer(c, resources); err != nil {
+			return err
+		}
+	}
+
 	logrus.Debugf("updated container %s", c.ID())
+
+	c.newContainerEvent(events.Update)
+
 	return nil
 }

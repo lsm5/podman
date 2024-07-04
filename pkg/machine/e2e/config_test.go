@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,6 @@ import (
 	"github.com/onsi/gomega/format"
 	. "github.com/onsi/gomega/gexec"
 	"github.com/onsi/gomega/types"
-	"golang.org/x/exp/slices"
 )
 
 var originalHomeDir = os.Getenv("HOME")
@@ -236,7 +236,9 @@ func isWSL() bool {
 	return isVmtype(define.WSLVirt)
 }
 
-//nolint:unused
+// Only used on Windows
+//
+//nolint:unparam,unused
 func runSystemCommand(binary string, cmdArgs []string, timeout time.Duration, wait bool) (*machineSession, error) {
 	GinkgoWriter.Println(binary + " " + strings.Join(cmdArgs, " "))
 	c := exec.Command(binary, cmdArgs...)

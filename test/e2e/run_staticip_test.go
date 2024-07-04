@@ -20,19 +20,19 @@ var _ = Describe("Podman run with --ip flag", func() {
 	It("Podman run --ip with garbage address", func() {
 		result := podmanTest.Podman([]string{"run", "--ip", "114232346", ALPINE, "ls"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).To(ExitWithError())
+		Expect(result).To(ExitWithError(125, `"114232346" is not an ip address`))
 	})
 
 	It("Podman run --ip with v6 address", func() {
 		result := podmanTest.Podman([]string{"run", "--ip", "2001:db8:bad:beef::1", ALPINE, "ls"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).To(ExitWithError())
+		Expect(result).To(ExitWithError(126, "requested static ip 2001:db8:bad:beef::1 not in any subnet on network podman"))
 	})
 
 	It("Podman run --ip with non-allocatable IP", func() {
 		result := podmanTest.Podman([]string{"run", "--ip", "203.0.113.124", ALPINE, "ls"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).To(ExitWithError())
+		Expect(result).To(ExitWithError(126, "requested static ip 203.0.113.124 not in any subnet on network podman"))
 	})
 
 	It("Podman run with specified static IP has correct IP", func() {
@@ -82,6 +82,7 @@ var _ = Describe("Podman run with --ip flag", func() {
 		result := podmanTest.Podman([]string{"run", "-d", "--name", "nginx", "--ip", ip, NGINX_IMAGE})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(ExitCleanly())
+		cid := result.OutputToString()
 
 		// This test should not use a proxy
 		client := &http.Client{
@@ -112,7 +113,6 @@ var _ = Describe("Podman run with --ip flag", func() {
 		}
 		result = podmanTest.Podman([]string{"run", "--ip", ip, ALPINE, "ip", "addr"})
 		result.WaitWithDefaultTimeout()
-		Expect(result).To(ExitWithError())
-		Expect(result.ErrorToString()).To(ContainSubstring(" address %s ", ip))
+		Expect(result).To(ExitWithError(126, fmt.Sprintf("IPAM error: requested ip address %s is already allocated to container ID %s", ip, cid)))
 	})
 })
