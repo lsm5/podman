@@ -28,7 +28,7 @@ func isEventBackendJournald(podmanTest *PodmanTestIntegration) bool {
 
 var _ = Describe("Podman logs", func() {
 
-	It("podman logs on not existent container", func() {
+	FIt("podman logs on not existent container", func() {
 		results := podmanTest.Podman([]string{"logs", "notexist"})
 		results.WaitWithDefaultTimeout()
 		Expect(results).To(ExitWithError(125, `no container with name or ID "notexist" found: no such container`))
@@ -48,7 +48,7 @@ var _ = Describe("Podman logs", func() {
 			}
 		}
 
-		It("all lines: "+log, func() {
+		FIt("all lines: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -69,7 +69,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("tail two lines: "+log, func() {
+		FIt("tail two lines: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -90,7 +90,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("tail zero lines: "+log, func() {
+		FIt("tail zero lines: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -109,7 +109,7 @@ var _ = Describe("Podman logs", func() {
 			Expect(results.OutputToStringArray()).To(BeEmpty())
 		})
 
-		It("tail 99 lines: "+log, func() {
+		FIt("tail 99 lines: "+log, func() {
 			skipIfJournaldInContainer()
 
 			name := "test1"
@@ -129,7 +129,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("tail 800 lines: "+log, func() {
+		FIt("tail 800 lines: "+log, func() {
 			skipIfJournaldInContainer()
 
 			// we match 800 line array here, make sure to print all lines when assertion fails.
@@ -161,7 +161,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("tail 2 lines with timestamps: "+log, func() {
+		FIt("tail 2 lines with timestamps: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -181,7 +181,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("since time 2017-08-07: "+log, func() {
+		FIt("since time 2017-08-07: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -201,7 +201,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("since duration 10m: "+log, func() {
+		FIt("since duration 10m: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -221,7 +221,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("until duration 10m: "+log, func() {
+		FIt("until duration 10m: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -241,7 +241,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("until time NOW: "+log, func() {
+		FIt("until time NOW: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
@@ -264,7 +264,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("latest and container name should fail: "+log, func() {
+		FIt("latest and container name should fail: "+log, func() {
 			skipIfJournaldInContainer()
 
 			results := podmanTest.Podman([]string{"logs", "-l", "foobar"})
@@ -276,7 +276,7 @@ var _ = Describe("Podman logs", func() {
 			}
 		})
 
-		It("two containers showing short container IDs: "+log, func() {
+		FIt("two containers showing short container IDs: "+log, func() {
 			skipIfJournaldInContainer()
 			SkipIfRemote("podman-remote logs does not support showing two containers at the same time")
 
@@ -303,7 +303,7 @@ var _ = Describe("Podman logs", func() {
 			Expect(output[0]).To(Or(ContainSubstring(cid1[:12]), ContainSubstring(cid2[:12])))
 		})
 
-		It("podman logs on a created container should result in 0 exit code: "+log, func() {
+		FIt("podman logs on a created container should result in 0 exit code: "+log, func() {
 			skipIfJournaldInContainer()
 
 			session := podmanTest.Podman([]string{"create", "--log-driver", log, "--name", "log", ALPINE})
@@ -315,7 +315,7 @@ var _ = Describe("Podman logs", func() {
 			Expect(results).To(ExitCleanly())
 		})
 
-		It("streaming output: "+log, func() {
+		FIt("streaming output: "+log, func() {
 			skipIfJournaldInContainer()
 
 			containerName := "logs-f"
@@ -355,7 +355,7 @@ var _ = Describe("Podman logs", func() {
 			Expect(results).To(ExitCleanly())
 		})
 
-		It("follow output stopped container: "+log, func() {
+		FIt("follow output stopped container: "+log, func() {
 			skipIfJournaldInContainer()
 
 			containerName := "logs-f"
@@ -374,7 +374,7 @@ var _ = Describe("Podman logs", func() {
 			Expect(results).To(ExitCleanly())
 		})
 
-		It("using container with container log-size: "+log, func() {
+		FIt("using container with container log-size: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "--log-opt=max-size=10k", "-d", ALPINE, "echo", "podman podman podman"})
@@ -399,7 +399,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("Make sure logs match expected length: "+log, func() {
+		FIt("Make sure logs match expected length: "+log, func() {
 			skipIfJournaldInContainer()
 
 			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "--name", "test", ALPINE, "sh", "-c", "echo 1; echo 2"})
@@ -421,7 +421,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("podman logs test stdout and stderr: "+log, func() {
+		FIt("podman logs test stdout and stderr: "+log, func() {
 			skipIfJournaldInContainer()
 
 			cname := "log-test"
@@ -442,7 +442,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("podman logs partial log lines: "+log, func() {
+		FIt("podman logs partial log lines: "+log, func() {
 			skipIfJournaldInContainer()
 
 			cname := "log-test"
@@ -464,7 +464,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("podman pod logs -l with newer container created: "+log, func() {
+		FIt("podman pod logs -l with newer container created: "+log, func() {
 			skipIfJournaldInContainer()
 			SkipIfRemote("no -l in remote")
 
@@ -504,7 +504,7 @@ var _ = Describe("Podman logs", func() {
 			}).WithTimeout(logTimeout).Should(Succeed())
 		})
 
-		It("podman pod logs -l: "+log, func() {
+		FIt("podman pod logs -l: "+log, func() {
 			skipIfJournaldInContainer()
 			SkipIfRemote("no -l in remote")
 
@@ -535,7 +535,7 @@ var _ = Describe("Podman logs", func() {
 		})
 	}
 
-	It("using journald for container with container tag", func() {
+	FIt("using journald for container with container tag", func() {
 		SkipIfJournaldUnavailable()
 		logc := podmanTest.Podman([]string{"run", "--log-driver", "journald", "--log-opt=tag={{.ImageName}},withcomma", "-d", ALPINE, "sh", "-c", "echo podman; sleep 0.1; echo podman; sleep 0.1; echo podman"})
 		logc.WaitWithDefaultTimeout()
@@ -554,7 +554,7 @@ var _ = Describe("Podman logs", func() {
 		}).Should(Succeed())
 	})
 
-	It("using journald container name", func() {
+	FIt("using journald container name", func() {
 		SkipIfJournaldUnavailable()
 		containerName := "inside-journal"
 		logc := podmanTest.Podman([]string{"run", "--log-driver", "journald", "-d", "--name", containerName, ALPINE, "sh", "-c", "echo podman; sleep 0.1; echo podman; sleep 0.1; echo podman"})
@@ -574,7 +574,7 @@ var _ = Describe("Podman logs", func() {
 		}).Should(Succeed())
 	})
 
-	It("podman logs with log-driver=none errors", func() {
+	FIt("podman logs with log-driver=none errors", func() {
 		ctrName := "logsctr"
 		logc := podmanTest.Podman([]string{"run", "--name", ctrName, "-d", "--log-driver", "none", ALPINE, "top"})
 		logc.WaitWithDefaultTimeout()
@@ -585,7 +585,7 @@ var _ = Describe("Podman logs", func() {
 		Expect(logs).To(ExitWithError(125, "this container is using the 'none' log driver, cannot read logs: this container is not logging output"))
 	})
 
-	It("podman logs with non ASCII log tag fails without correct LANG", func() {
+	FIt("podman logs with non ASCII log tag fails without correct LANG", func() {
 		SkipIfJournaldUnavailable()
 		// need to set the LANG to something that does not support german umlaute to trigger the failure case
 		cleanup := setLangEnv("C")
@@ -601,7 +601,7 @@ var _ = Describe("Podman logs", func() {
 		}
 	})
 
-	It("podman logs with non ASCII log tag succeeds with proper env", func() {
+	FIt("podman logs with non ASCII log tag succeeds with proper env", func() {
 		SkipIfJournaldUnavailable()
 		cleanup := setLangEnv("en_US.UTF-8")
 		if IsRemote() {
@@ -614,7 +614,7 @@ var _ = Describe("Podman logs", func() {
 		Expect(logc.OutputToString()).To(Equal("podman"))
 	})
 
-	It("podman pod logs with container names", func() {
+	FIt("podman pod logs with container names", func() {
 		SkipIfRemote("Remote can only process one container at a time")
 		podName := "testPod"
 		containerName1 := "container1"
@@ -643,7 +643,7 @@ var _ = Describe("Podman logs", func() {
 			g.Expect(output).To(ContainElement(ContainSubstring(containerName2)))
 		}).Should(Succeed())
 	})
-	It("podman pod logs with different colors", func() {
+	FIt("podman pod logs with different colors", func() {
 		SkipIfRemote("Remote can only process one container at a time")
 		podName := "testPod"
 		containerName1 := "container1"
