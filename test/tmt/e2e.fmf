@@ -25,7 +25,7 @@ adjust+:
 /local-rootless:
     tag: [ local, rootless, e2e ]
     summary: rootless test
-    test: chown -R $ROOTLESS_USER $TMT_TREE && su - "$ROOTLESS_USER" -c "cd $TMT_TREE && make && make localintegration"
+    test: loginctl enable-linger $ROOTLESS_USER && chown -R $ROOTLESS_USER $TMT_TREE && su - "$ROOTLESS_USER" -c "cd $TMT_TREE && make && make localintegration"
     duration: 30m
 
 /remote-root:
@@ -37,5 +37,5 @@ adjust+:
 /remote-rootless:
     tag: [ remote, rootless, e2e ]
     summary: remote rootless test
-    test: chown -R $ROOTLESS_USER $TMT_TREE && su - "$ROOTLESS_USER" -c "cd $TMT_TREE && make && make remoteintegration"
+    test: loginctl enable-linger $ROOTLESS_USER && chown -R $ROOTLESS_USER $TMT_TREE && su - "$ROOTLESS_USER" -c "cd $TMT_TREE && make && make remoteintegration"
     duration: 30m
