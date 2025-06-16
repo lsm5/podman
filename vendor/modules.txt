@@ -111,7 +111,7 @@ github.com/containernetworking/cni/pkg/version
 # github.com/containernetworking/plugins v1.7.1
 ## explicit; go 1.23.0
 github.com/containernetworking/plugins/pkg/ns
-# github.com/containers/buildah v1.40.1-0.20250604193037-b8d8cc375f30
+# github.com/containers/buildah v1.40.1-0.20250604193037-b8d8cc375f30 => /home/lsm5/repositories/containers/buildah
 ## explicit; go 1.23.3
 github.com/containers/buildah
 github.com/containers/buildah/bind
@@ -144,7 +144,7 @@ github.com/containers/buildah/pkg/sshagent
 github.com/containers/buildah/pkg/util
 github.com/containers/buildah/pkg/volumes
 github.com/containers/buildah/util
-# github.com/containers/common v0.63.2-0.20250604184922-bb2062b6265c
+# github.com/containers/common v0.63.2-0.20250604184922-bb2062b6265c => /home/lsm5/repositories/containers/common
 ## explicit; go 1.23.3
 github.com/containers/common/internal
 github.com/containers/common/internal/attributedstring
@@ -217,7 +217,7 @@ github.com/containers/conmon/runner/config
 # github.com/containers/gvisor-tap-vsock v0.8.6
 ## explicit; go 1.23.0
 github.com/containers/gvisor-tap-vsock/pkg/types
-# github.com/containers/image/v5 v5.35.1-0.20250603145948-347a6e7283ef
+# github.com/containers/image/v5 v5.35.1-0.20250603145948-347a6e7283ef => /home/lsm5/repositories/containers/image
 ## explicit; go 1.23.3
 github.com/containers/image/v5/copy
 github.com/containers/image/v5/directory
@@ -327,7 +327,7 @@ github.com/containers/psgo/internal/dev
 github.com/containers/psgo/internal/host
 github.com/containers/psgo/internal/proc
 github.com/containers/psgo/internal/process
-# github.com/containers/storage v1.58.1-0.20250515004000-78f4258b2bd9
+# github.com/containers/storage v1.58.1-0.20250515004000-78f4258b2bd9 => /home/lsm5/repositories/containers/storage/
 ## explicit; go 1.23.0
 github.com/containers/storage
 github.com/containers/storage/drivers
@@ -342,6 +342,8 @@ github.com/containers/storage/drivers/vfs
 github.com/containers/storage/drivers/windows
 github.com/containers/storage/drivers/zfs
 github.com/containers/storage/internal/dedup
+github.com/containers/storage/internal/rawfilelock
+github.com/containers/storage/internal/staging_lockfile
 github.com/containers/storage/pkg/archive
 github.com/containers/storage/pkg/chrootarchive
 github.com/containers/storage/pkg/chunked
@@ -1294,3 +1296,7 @@ tags.cncf.io/container-device-interface/pkg/parser
 # tags.cncf.io/container-device-interface/specs-go v1.0.0
 ## explicit; go 1.19
 tags.cncf.io/container-device-interface/specs-go
+# github.com/containers/storage => /home/lsm5/repositories/containers/storage/
+# github.com/containers/image/v5 => /home/lsm5/repositories/containers/image
+# github.com/containers/common => /home/lsm5/repositories/containers/common
+# github.com/containers/buildah => /home/lsm5/repositories/containers/buildah

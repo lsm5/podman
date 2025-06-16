@@ -14,6 +14,7 @@ import (
 
 	"github.com/containers/buildah"
 	"github.com/containers/buildah/define"
+	"github.com/containers/buildah/internal"
 	internalUtil "github.com/containers/buildah/internal/util"
 	"github.com/containers/buildah/pkg/parse"
 	"github.com/containers/buildah/pkg/sshagent"
@@ -43,18 +44,19 @@ import (
 // instruction in the Dockerfile, since that's usually an indication of a user
 // error, but for these values we make exceptions and ignore them.
 var builtinAllowedBuildArgs = map[string]struct{}{
-	"HTTP_PROXY":     {},
-	"http_proxy":     {},
-	"HTTPS_PROXY":    {},
-	"https_proxy":    {},
-	"FTP_PROXY":      {},
-	"ftp_proxy":      {},
-	"NO_PROXY":       {},
-	"no_proxy":       {},
-	"TARGETARCH":     {},
-	"TARGETOS":       {},
-	"TARGETPLATFORM": {},
-	"TARGETVARIANT":  {},
+	"HTTP_PROXY":                 {},
+	"http_proxy":                 {},
+	"HTTPS_PROXY":                {},
+	"https_proxy":                {},
+	"FTP_PROXY":                  {},
+	"ftp_proxy":                  {},
+	"NO_PROXY":                   {},
+	"no_proxy":                   {},
+	"TARGETARCH":                 {},
+	"TARGETOS":                   {},
+	"TARGETPLATFORM":             {},
+	"TARGETVARIANT":              {},
+	internal.SourceDateEpochName: {},
 }
 
 // Executor is a buildah-based implementation of the imagebuilder.Executor
@@ -151,6 +153,7 @@ type Executor struct {
 	logPrefix                               string
 	unsetEnvs                               []string
 	unsetLabels                             []string
+	unsetAnnotations                        []string
 	processLabel                            string   // Shares processLabel of first stage container with containers of other stages in same build
 	mountLabel                              string   // Shares mountLabel of first stage container with containers of other stages in same build
 	buildOutputs                            []string // Specifies instructions for any custom build output
@@ -164,6 +167,8 @@ type Executor struct {
 	compatVolumes                           types.OptionalBool
 	compatScratchConfig                     types.OptionalBool
 	noPivotRoot                             bool
+	sourceDateEpoch                         *time.Time
+	rewriteTimestamp                        bool
 }
 
 type imageTypeAndHistoryAndDiffIDs struct {
@@ -319,6 +324,7 @@ func newExecutor(logger *logrus.Logger, logPrefix string, store storage.Store, o
 		logPrefix:                               logPrefix,
 		unsetEnvs:                               slices.Clone(options.UnsetEnvs),
 		unsetLabels:                             slices.Clone(options.UnsetLabels),
+		unsetAnnotations:                        slices.Clone(options.UnsetAnnotations),
 		buildOutputs:                            buildOutputs,
 		osVersion:                               options.OSVersion,
 		osFeatures:                              slices.Clone(options.OSFeatures),
@@ -330,7 +336,14 @@ func newExecutor(logger *logrus.Logger, logPrefix string, store storage.Store, o
 		compatVolumes:                           options.CompatVolumes,
 		compatScratchConfig:                     options.CompatScratchConfig,
 		noPivotRoot:                             options.NoPivotRoot,
+		sourceDateEpoch:                         options.SourceDateEpoch,
+		rewriteTimestamp:                        options.RewriteTimestamp,
 	}
+	// sort unsetAnnotations because we will later write these
+	// values to the history of the image therefore we want to
+	// make sure that order is always consistent.
+	slices.Sort(exec.unsetAnnotations)
+
 	if exec.err == nil {
 		exec.err = os.Stderr
 	}

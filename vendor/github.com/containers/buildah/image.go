@@ -52,9 +52,10 @@ const (
 // control whether various information like the like setuid and setgid bits and
 // xattrs are preserved when extracting file system objects.
 type ExtractRootfsOptions struct {
-	StripSetuidBit bool // strip the setuid bit off of items being extracted.
-	StripSetgidBit bool // strip the setgid bit off of items being extracted.
-	StripXattrs    bool // don't record extended attributes of items being extracted.
+	StripSetuidBit bool       // strip the setuid bit off of items being extracted.
+	StripSetgidBit bool       // strip the setgid bit off of items being extracted.
+	StripXattrs    bool       // don't record extended attributes of items being extracted.
+	ForceTimestamp *time.Time // force timestamps in output content
 }
 
 type containerImageRef struct {
@@ -120,6 +121,15 @@ type containerImageSource struct {
 	manifestType  string
 	blobDirectory string
 	blobLayers    map[digest.Digest]blobLayerInfo
+}
+
+func getDigester() digest.Digester {
+	digestType := getDigestType()
+	algorithm := digest.Algorithm(digestType)
+	if !algorithm.Available() {
+		algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+	}
+	return algorithm.Digester()
 }
 
 func (i *containerImageRef) NewImage(ctx context.Context, sc *types.SystemContext) (types.ImageCloser, error) {
@@ -226,13 +236,14 @@ func (i *containerImageRef) extractRootfs(opts ExtractRootfsOptions) (io.ReadClo
 	pipeReader, pipeWriter := io.Pipe()
 	errChan := make(chan error, 1)
 	go func() {
+		defer pipeWriter.Close()
 		defer close(errChan)
 		if len(i.extraImageContent) > 0 {
 			// Abuse the tar format and _prepend_ the synthesized
 			// data items to the archive we'll get from
 			// copier.Get(), in a way that looks right to a reader
 			// as long as we DON'T Close() the tar Writer.
-			filename, _, _, err := i.makeExtraImageContentDiff(false)
+			filename, _, _, err := i.makeExtraImageContentDiff(false, opts.ForceTimestamp)
 			if err != nil {
 				errChan <- fmt.Errorf("creating part of archive with extra content: %w", err)
 				return
@@ -257,10 +268,10 @@ func (i *containerImageRef) extractRootfs(opts ExtractRootfsOptions) (io.ReadClo
 			StripSetuidBit: opts.StripSetuidBit,
 			StripSetgidBit: opts.StripSetgidBit,
 			StripXattrs:    opts.StripXattrs,
+			Timestamp:      opts.ForceTimestamp,
 		}
 		err := copier.Get(mountPoint, mountPoint, copierOptions, []string{"."}, pipeWriter)
 		errChan <- err
-		pipeWriter.Close()
 	}()
 	return ioutils.NewReadCloserWrapper(pipeReader, func() error {
 		if err = pipeReader.Close(); err != nil {
@@ -306,12 +317,21 @@ func (i *containerImageRef) newDockerSchema2ManifestBuilder() (manifestBuilder, 
 	if err := json.Unmarshal(i.dconfig, &dimage); err != nil {
 		return nil, err
 	}
+	// Suppress the hostname and domainname if we're running with the
+	// equivalent of either --timestamp or --source-date-epoch.
+	if i.created != nil {
+		dimage.Config.Hostname = "sandbox"
+		dimage.Config.Domainname = ""
+	}
 	// Set the parent, but only if we want to be compatible with "classic" docker build.
 	if i.compatSetParent == types.OptionalBoolTrue {
 		dimage.Parent = docker.ID(i.parent)
 	}
 	// Set the container ID and containerConfig in the docker format.
 	dimage.Container = i.containerID
+	if i.created != nil {
+		dimage.Container = ""
+	}
 	if dimage.Config != nil {
 		dimage.ContainerConfig = *dimage.Config
 	}
@@ -499,7 +519,12 @@ func (mb *dockerSchema2ManifestBuilder) manifestAndConfig() ([]byte, []byte, err
 	logrus.Debugf("Docker v2s2 config = %s", dconfig)
 
 	// Add the configuration blob to the manifest.
-	mb.dmanifest.Config.Digest = digest.Canonical.FromBytes(dconfig)
+	digestType := getDigestType()
+	algorithm := digest.Algorithm(digestType)
+	if !algorithm.Available() {
+		algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+	}
+	mb.dmanifest.Config.Digest = algorithm.FromBytes(dconfig)
 	mb.dmanifest.Config.Size = int64(len(dconfig))
 	mb.dmanifest.Config.MediaType = manifest.DockerV2Schema2ConfigMediaType
 
@@ -610,9 +635,8 @@ func (mb *ociManifestBuilder) computeLayerMIMEType(what string, layerCompression
 			// how to decompress them, we can't try to compress layers with xz.
 			return errors.New("media type for xz-compressed layers is not defined")
 		case archive.Zstd:
-			// Until the image specs define a media type for zstd-compressed layers, even if we know
-			// how to decompress them, we can't try to compress layers with zstd.
-			return errors.New("media type for zstd-compressed layers is not defined")
+			omediaType = v1.MediaTypeImageLayerZstd
+			logrus.Debugf("compressing %s with zstd", what)
 		default:
 			logrus.Debugf("compressing %s with unknown compressor(?)", what)
 		}
@@ -715,7 +739,12 @@ func (mb *ociManifestBuilder) manifestAndConfig() ([]byte, []byte, error) {
 	logrus.Debugf("OCIv1 config = %s", oconfig)
 
 	// Add the configuration blob to the manifest.
-	mb.omanifest.Config.Digest = digest.Canonical.FromBytes(oconfig)
+	digestType := getDigestType()
+	algorithm := digest.Algorithm(digestType)
+	if !algorithm.Available() {
+		algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+	}
+	mb.omanifest.Config.Digest = algorithm.FromBytes(oconfig)
 	mb.omanifest.Config.Size = int64(len(oconfig))
 	mb.omanifest.Config.MediaType = v1.MediaTypeImageConfig
 
@@ -849,7 +878,7 @@ func (i *containerImageRef) NewImageSource(_ context.Context, _ *types.SystemCon
 			layerUncompressedSize = apiLayers[apiLayerIndex].size
 		} else if layerID == synthesizedLayerID {
 			// layer diff consisting of extra files to synthesize into a layer
-			diffFilename, digest, size, err := i.makeExtraImageContentDiff(true)
+			diffFilename, digest, size, err := i.makeExtraImageContentDiff(true, nil)
 			if err != nil {
 				return nil, fmt.Errorf("unable to generate layer for additional content: %w", err)
 			}
@@ -932,7 +961,7 @@ func (i *containerImageRef) NewImageSource(_ context.Context, _ *types.SystemCon
 				}
 			}
 		}
-		srcHasher := digest.Canonical.Digester()
+		srcHasher := getDigester()
 		// Set up to write the possibly-recompressed blob.
 		layerFile, err := os.OpenFile(filepath.Join(path, "layer"), os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
@@ -945,7 +974,7 @@ func (i *containerImageRef) NewImageSource(_ context.Context, _ *types.SystemCon
 		var multiWriter io.Writer
 		// Avoid rehashing when we do not compress.
 		if i.compression != archive.Uncompressed {
-			destHasher = digest.Canonical.Digester()
+			destHasher = getDigester()
 			multiWriter = io.MultiWriter(counter, destHasher.Hash())
 		} else {
 			destHasher = srcHasher
@@ -1016,6 +1045,12 @@ func (i *containerImageRef) NewImageSource(_ context.Context, _ *types.SystemCon
 	if err != nil {
 		return nil, err
 	}
+	// Prepare digest algorithm for configDigest
+	digestType := getDigestType()
+	algorithm := digest.Algorithm(digestType)
+	if !algorithm.Available() {
+		algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+	}
 	src = &containerImageSource{
 		path:          path,
 		ref:           i,
@@ -1026,7 +1061,7 @@ func (i *containerImageRef) NewImageSource(_ context.Context, _ *types.SystemCon
 		names:         i.names,
 		compression:   i.compression,
 		config:        config,
-		configDigest:  digest.Canonical.FromBytes(config),
+		configDigest:  algorithm.FromBytes(config),
 		manifest:      imageManifest,
 		manifestType:  i.preferredManifestType,
 		blobDirectory: i.blobDirectory,
@@ -1152,64 +1187,89 @@ func (i *containerImageSource) GetBlob(_ context.Context, blob types.BlobInfo, _
 // makeExtraImageContentDiff creates an archive file containing the contents of
 // files named in i.extraImageContent.  The footer that marks the end of the
 // archive may be omitted.
-func (i *containerImageRef) makeExtraImageContentDiff(includeFooter bool) (_ string, _ digest.Digest, _ int64, retErr error) {
+func (i *containerImageRef) makeExtraImageContentDiff(includeFooter bool, timestamp *time.Time) (_ string, _ digest.Digest, _ int64, retErr error) {
 	cdir, err := i.store.ContainerDirectory(i.containerID)
 	if err != nil {
-		return "", "", -1, err
+		return "", "", 0, err
 	}
 	diff, err := os.CreateTemp(cdir, "extradiff")
 	if err != nil {
-		return "", "", -1, err
+		return "", "", 0, err
 	}
-	defer diff.Close()
 	defer func() {
+		diff.Close()
 		if retErr != nil {
 			os.Remove(diff.Name())
 		}
 	}()
-	digester := digest.Canonical.Digester()
+
+	digester := getDigester()
 	counter := ioutils.NewWriteCounter(digester.Hash())
-	tw := tar.NewWriter(io.MultiWriter(diff, counter))
-	created := time.Now()
-	if i.created != nil {
-		created = *i.created
-	}
-	for path, contents := range i.extraImageContent {
-		if err := func() error {
-			content, err := os.Open(contents)
-			if err != nil {
-				return err
+	if err := func() error {
+		tw := tar.NewWriter(io.MultiWriter(diff, counter))
+		if timestamp == nil {
+			now := time.Now()
+			timestamp = &now
+			if i.created != nil {
+				timestamp = i.created
 			}
-			defer content.Close()
-			st, err := content.Stat()
-			if err != nil {
-				return err
-			}
-			if err := tw.WriteHeader(&tar.Header{
-				Name:     path,
-				Typeflag: tar.TypeReg,
-				Mode:     0o644,
-				ModTime:  created,
-				Size:     st.Size(),
-			}); err != nil {
-				return err
-			}
-			if _, err := io.Copy(tw, content); err != nil {
-				return fmt.Errorf("writing content for %q: %w", path, err)
-			}
-			if err := tw.Flush(); err != nil {
-				return err
-			}
-			return nil
-		}(); err != nil {
-			return "", "", -1, err
 		}
+		for path, contents := range i.extraImageContent {
+			if err := func() error {
+				content, err := os.Open(contents)
+				if err != nil {
+					return err
+				}
+				defer content.Close()
+				st, err := content.Stat()
+				if err != nil {
+					return err
+				}
+				if err := tw.WriteHeader(&tar.Header{
+					Name:     path,
+					Typeflag: tar.TypeReg,
+					Mode:     0o644,
+					ModTime:  *timestamp,
+					Size:     st.Size(),
+				}); err != nil {
+					return err
+				}
+				if _, err := io.Copy(tw, content); err != nil {
+					return fmt.Errorf("writing content for %q: %w", path, err)
+				}
+				if err := tw.Flush(); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		if !includeFooter {
+			return nil
+		}
+		tw.Close()
+		return nil
+	}(); err != nil {
+		return "", "", 0, err
 	}
-	if !includeFooter {
-		return diff.Name(), "", -1, nil
+
+	// Read the file contents
+	diffBytes, err := os.ReadFile(diff.Name())
+	if err != nil {
+		return "", "", 0, fmt.Errorf("reading diff file: %w", err)
 	}
-	tw.Close()
-	return diff.Name(), digester.Digest(), counter.Count, nil
+
+	// Get the digest type from storage.conf
+	digestType := getDigestType()
+	algorithm := digest.Algorithm(digestType)
+	if !algorithm.Available() {
+		algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+	}
+
+	// Calculate the digest
+	d := algorithm.FromBytes(diffBytes)
+	return diff.Name(), d, counter.Count, nil
 }
 
 // makeFilteredLayerWriteCloser returns either the passed-in WriteCloser, or if
@@ -1303,7 +1363,7 @@ func (b *Builder) makeLinkedLayerInfos(layers []LinkedLayer, layerType string, l
 				}
 			}
 
-			digester := digest.Canonical.Digester()
+			digester := getDigester()
 			sizeCountedFile := ioutils.NewWriteCounter(io.MultiWriter(digester.Hash(), f))
 			wc := makeFilteredLayerWriteCloser(ioutils.NopWriteCloser(sizeCountedFile), layerModTime, layerLatestModTime)
 			_, copyErr := io.Copy(wc, rc)
@@ -1388,7 +1448,12 @@ func (b *Builder) makeContainerImageRef(options CommitOptions) (*containerImageR
 	parent := ""
 	forceOmitHistory := false
 	if b.FromImageID != "" {
-		parentDigest := digest.NewDigestFromEncoded(digest.Canonical, b.FromImageID)
+		digestType := getDigestType()
+		algorithm := digest.Algorithm(digestType)
+		if !algorithm.Available() {
+			algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+		}
+		parentDigest := digest.NewDigestFromEncoded(algorithm, b.FromImageID)
 		if parentDigest.Validate() == nil {
 			parent = parentDigest.String()
 		}
