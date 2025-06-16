@@ -10,6 +10,7 @@ import (
 	"github.com/containers/image/v5/types"
 	"github.com/containers/podman/v5/cmd/podman/common"
 	"github.com/containers/podman/v5/cmd/podman/registry"
+	"github.com/containers/podman/v5/cmd/podman/utils"
 	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/util"
 	"github.com/spf13/cobra"
@@ -26,6 +27,7 @@ type pushOptionsWrapper struct {
 	EncryptionKeys             []string
 	EncryptLayers              []int
 	DigestFile                 string
+	DigestType                 string // CLI only
 }
 
 var (
@@ -152,6 +154,11 @@ func pushFlags(cmd *cobra.Command) {
 	flags.IntSliceVar(&pushOptions.EncryptLayers, encryptLayersFlagName, nil, "Layers to encrypt, 0-indexed layer indices with support for negative indexing (e.g. 0 is the first layer, -1 is the last layer). If not defined, will encrypt all layers if encryption-key flag is specified")
 	_ = cmd.RegisterFlagCompletionFunc(encryptLayersFlagName, completion.AutocompleteDefault)
 
+	flags.StringVar(&pushOptions.DigestType, "digest", "", "digest type to use (sha256 or sha512)")
+	_ = cmd.RegisterFlagCompletionFunc("digest", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"sha256", "sha512"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	if registry.IsRemote() {
 		_ = flags.MarkHidden("cert-dir")
 		_ = flags.MarkHidden("compress")
@@ -247,6 +254,18 @@ func imagePush(cmd *cobra.Command, args []string) error {
 			// is selected then defaults to `true`.
 			pushOptions.ForceCompressionFormat = true
 		}
+	}
+
+	var cleanup func()
+	if pushOptions.DigestType != "" {
+		if pushOptions.DigestType != "sha256" && pushOptions.DigestType != "sha512" {
+			return fmt.Errorf("invalid digest type: %s (must be sha256 or sha512)", pushOptions.DigestType)
+		}
+		_, cleanup, err = utils.OverrideStorageConfWithDigest(pushOptions.DigestType)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
 	}
 
 	// Let's do all the remaining Yoga in the API to prevent us from scattering

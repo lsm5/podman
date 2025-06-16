@@ -25,6 +25,7 @@ type pullOptionsWrapper struct {
 	TLSVerifyCLI   bool // CLI only
 	CredentialsCLI string
 	DecryptionKeys []string
+	DigestType     string // CLI only
 }
 
 var (
@@ -131,6 +132,11 @@ func pullFlags(cmd *cobra.Command) {
 		flags.StringVar(&pullOptions.SignaturePolicy, signaturePolicyFlagName, "", "`Pathname` of signature policy file (not usually used)")
 		_ = flags.MarkHidden(signaturePolicyFlagName)
 	}
+
+	flags.StringVar(&pullOptions.DigestType, "digest", "", "digest type to use (sha256 or sha512)")
+	_ = cmd.RegisterFlagCompletionFunc("digest", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"sha256", "sha512"}, cobra.ShellCompDirectiveNoFileComp
+	})
 }
 
 // imagePull is implement the command for pulling images.
@@ -202,6 +208,18 @@ func imagePull(cmd *cobra.Command, args []string) error {
 
 	if !pullOptions.Quiet {
 		pullOptions.Writer = os.Stderr
+	}
+
+	var cleanup func()
+	if pullOptions.DigestType != "" {
+		if pullOptions.DigestType != "sha256" && pullOptions.DigestType != "sha512" {
+			return fmt.Errorf("invalid digest type: %s (must be sha256 or sha512)", pullOptions.DigestType)
+		}
+		_, cleanup, err = utils.OverrideStorageConfWithDigest(pullOptions.DigestType)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
 	}
 
 	// Let's do all the remaining Yoga in the API to prevent us from

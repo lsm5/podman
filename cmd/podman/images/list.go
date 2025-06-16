@@ -15,6 +15,7 @@ import (
 	"github.com/containers/image/v5/docker/reference"
 	"github.com/containers/podman/v5/cmd/podman/common"
 	"github.com/containers/podman/v5/cmd/podman/registry"
+	"github.com/containers/podman/v5/cmd/podman/utils"
 	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/docker/go-units"
 	"github.com/spf13/cobra"
@@ -346,7 +347,11 @@ func (i imageReporter) ID() string {
 	if !listFlag.noTrunc && len(i.ImageSummary.ID) >= 12 {
 		return i.ImageSummary.ID[0:12]
 	}
-	return "sha256:" + i.ImageSummary.ID
+	digestType, err := utils.GetDigestTypeFromStorageConf()
+	if err != nil {
+		digestType = "sha256" // fallback
+	}
+	return digestType + ":" + i.ImageSummary.ID
 }
 
 func (i imageReporter) Created() string {

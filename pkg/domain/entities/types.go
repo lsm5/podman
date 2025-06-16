@@ -76,6 +76,8 @@ type InspectOptions struct {
 	Type string `json:",omitempty"`
 	// All -- inspect all
 	All bool `json:",omitempty"`
+	// DigestType -- digest type to use (sha256 or sha512)
+	DigestType string `json:",omitempty"`
 }
 
 // DiffOptions all API and CLI diff commands and diff sub-commands use the same options
