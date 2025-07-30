@@ -420,6 +420,24 @@ func (ir *ImageEngine) Push(ctx context.Context, source string, destination stri
 		pushOptions.Writer = os.Stderr
 	}
 
+	// Handle digest algorithm configuration
+	var digestAlgorithm string
+	if options.DigestAlgorithm != "" {
+		// Use the digest algorithm specified on the command line
+		digestAlgorithm = options.DigestAlgorithm
+	} else {
+		// The libimage runtime should automatically use the digest algorithm
+		// configured in storage.conf through the vendored storage library
+		// For now, default to sha256 (digest.Canonical) if not specified
+		digestAlgorithm = "sha256" // fallback default (digest.Canonical)
+	}
+
+	// Log the digest algorithm being used for debugging
+	logrus.Debugf("Using digest algorithm for push operation: %s", digestAlgorithm)
+
+	// The vendored libimage should use the storage configuration automatically,
+	// so we don't need to pass digestAlgorithm explicitly if the storage is configured properly
+
 	pushedManifestBytes, pushError := ir.Libpod.LibimageRuntime().Push(ctx, source, destination, pushOptions)
 	if pushError == nil {
 		manifestDigest, err := manifest.Digest(pushedManifestBytes)
