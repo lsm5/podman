@@ -121,6 +121,8 @@ func Digest(manifest []byte) (digest.Digest, error) {
 		}
 	}
 
+	// Note: This uses the canonical digest algorithm. For digest agility,
+	// callers should use a specific algorithm via digest.Algorithm.FromBytes()
 	return digest.FromBytes(manifest), nil
 }
 
