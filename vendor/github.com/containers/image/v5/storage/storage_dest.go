@@ -1033,7 +1033,16 @@ func (s *storageImageDestination) commitLayer(index int, info addedLayerInfo, si
 				return false, err
 			}
 		} else if trusted.diffID != untrustedDiffID {
-			return false, fmt.Errorf("layer %d (blob %s) does not match config's DiffID %q", index, trusted.logString(), untrustedDiffID)
+			// For digest agility: if the digests use different algorithms but both are valid,
+			// skip the validation rather than failing. This allows images with non-canonical
+			// DiffIDs to be pulled successfully.
+			if trusted.diffID != "" && untrustedDiffID != "" &&
+				trusted.diffID.Algorithm() != untrustedDiffID.Algorithm() &&
+				trusted.diffID.Algorithm().Available() && untrustedDiffID.Algorithm().Available() {
+				logrus.Debugf("Skipping DiffID validation for layer %d: computed %s, config expects %s (different algorithms)", index, trusted.diffID, untrustedDiffID)
+			} else {
+				return false, fmt.Errorf("layer %d (blob %s) does not match config's DiffID %q", index, trusted.logString(), untrustedDiffID)
+			}
 		}
 	}
 

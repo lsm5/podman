@@ -987,6 +987,9 @@ func computeDiffID(stream io.Reader, decompressor compressiontypes.DecompressorF
 		stream = s
 	}
 
+	// Note: For digest agility, we should ideally use the algorithm from the expected DiffID,
+	// but since that information is not available in this context, we continue using the canonical algorithm.
+	// This may cause validation failures when pulling images with non-canonical DiffIDs.
 	return digest.Canonical.FromReader(stream)
 }
 
