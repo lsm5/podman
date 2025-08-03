@@ -151,7 +151,7 @@ func Push(ctx context.Context, image string, dest types.ImageReference, options 
 		return nil, "", err
 	}
 
-	manifestDigest, err := manifest.Digest(manifestBytes)
+	manifestDigest, err := manifest.DigestWithAlgorithm(manifestBytes, options.Store.GetDigestAlgorithm())
 	if err != nil {
 		return nil, "", fmt.Errorf("computing digest of manifest of new image %q: %w", transports.ImageName(dest), err)
 	}

@@ -921,7 +921,7 @@ func (i *Image) hasDifferentDigestWithSystemContext(ctx context.Context, remoteR
 			return false, err
 		}
 	} else {
-		remoteDigest, err = manifest.Digest(rawManifest)
+		remoteDigest, err = manifest.DigestWithAlgorithm(rawManifest, i.runtime.store.GetDigestAlgorithm())
 		if err != nil {
 			return false, err
 		}

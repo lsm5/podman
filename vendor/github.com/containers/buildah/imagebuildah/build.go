@@ -389,7 +389,7 @@ func BuildDockerfiles(ctx context.Context, store storage.Store, options define.B
 		if err != nil {
 			return "", nil, err
 		}
-		manifestDigest, err := manifest.Digest(manifestBytes)
+		manifestDigest, err := manifest.DigestWithAlgorithm(manifestBytes, store.GetDigestAlgorithm())
 		if err != nil {
 			return "", nil, err
 		}

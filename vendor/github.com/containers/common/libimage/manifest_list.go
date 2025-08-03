@@ -147,7 +147,7 @@ func (i *Image) ConvertToManifestList(ctx context.Context) (*ManifestList, error
 	if err != nil {
 		return nil, fmt.Errorf("serializing image index: %w", err)
 	}
-	listDigest, err := manifest.Digest(listBytes)
+	listDigest, err := manifest.DigestWithAlgorithm(listBytes, i.runtime.store.GetDigestAlgorithm())
 	if err != nil {
 		return nil, fmt.Errorf("digesting image index: %w", err)
 	}
@@ -723,7 +723,7 @@ func (m *ManifestList) AnnotateInstance(d digest.Digest, options *ManifestListAn
 		if err != nil {
 			return err
 		}
-		subjectManifestDigest, err := manifest.Digest(subjectManifestBytes)
+		subjectManifestDigest, err := manifest.DigestWithAlgorithm(subjectManifestBytes, m.image.runtime.store.GetDigestAlgorithm())
 		if err != nil {
 			return err
 		}

@@ -198,7 +198,7 @@ func newBuilder(ctx context.Context, store storage.Store, options BuilderOptions
 		if err != nil {
 			return nil, fmt.Errorf("loading image manifest for %q: %w", transports.ImageName(ref), err)
 		}
-		if manifestDigest, err := manifest.Digest(manifestBytes); err == nil {
+		if manifestDigest, err := manifest.DigestWithAlgorithm(manifestBytes, store.GetDigestAlgorithm()); err == nil {
 			imageDigest = manifestDigest.String()
 		}
 		var instanceDigest *digest.Digest

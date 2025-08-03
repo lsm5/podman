@@ -21,6 +21,7 @@ import (
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/pkg/compression"
 	compressiontypes "github.com/containers/image/v5/pkg/compression/types"
+	"github.com/containers/image/v5/storage"
 	"github.com/containers/image/v5/transports"
 	"github.com/containers/image/v5/types"
 	chunkedToc "github.com/containers/storage/pkg/chunked/toc"
@@ -379,7 +380,22 @@ func (ic *imageCopier) noPendingManifestUpdates() bool {
 // compareImageDestinationManifestEqual compares the source and destination image manifests (reading the manifest from the
 // (possibly remote) destination). If they are equal, it returns a full copySingleImageResult, nil otherwise.
 func (ic *imageCopier) compareImageDestinationManifestEqual(ctx context.Context, targetInstance *digest.Digest) (*copySingleImageResult, error) {
-	srcManifestDigest, err := manifest.Digest(ic.src.ManifestBlob)
+	// Try to get digest algorithm from storage destination, fallback to canonical
+	var srcManifestDigest digest.Digest
+	var err error
+	if ic.c.dest.Reference().Transport().Name() == "containers-storage" {
+		if storageTransport, ok := ic.c.dest.Reference().Transport().(storage.StoreTransport); ok {
+			if store := storageTransport.GetStoreIfSet(); store != nil {
+				srcManifestDigest, err = manifest.DigestWithAlgorithm(ic.src.ManifestBlob, store.GetDigestAlgorithm())
+			} else {
+				srcManifestDigest, err = manifest.Digest(ic.src.ManifestBlob)
+			}
+		} else {
+			srcManifestDigest, err = manifest.Digest(ic.src.ManifestBlob)
+		}
+	} else {
+		srcManifestDigest, err = manifest.Digest(ic.src.ManifestBlob)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("calculating manifest digest: %w", err)
 	}
@@ -397,7 +413,21 @@ func (ic *imageCopier) compareImageDestinationManifestEqual(ctx context.Context,
 		return nil, nil
 	}
 
-	destManifestDigest, err := manifest.Digest(destManifest)
+	// Try to get digest algorithm from storage destination, fallback to canonical
+	var destManifestDigest digest.Digest
+	if ic.c.dest.Reference().Transport().Name() == "containers-storage" {
+		if storageTransport, ok := ic.c.dest.Reference().Transport().(storage.StoreTransport); ok {
+			if store := storageTransport.GetStoreIfSet(); store != nil {
+				destManifestDigest, err = manifest.DigestWithAlgorithm(destManifest, store.GetDigestAlgorithm())
+			} else {
+				destManifestDigest, err = manifest.Digest(destManifest)
+			}
+		} else {
+			destManifestDigest, err = manifest.Digest(destManifest)
+		}
+	} else {
+		destManifestDigest, err = manifest.Digest(destManifest)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("calculating manifest digest: %w", err)
 	}
@@ -601,7 +631,39 @@ func (ic *imageCopier) copyUpdatedConfigAndManifest(ctx context.Context, instanc
 	}
 
 	ic.c.Printf("Writing manifest to image destination\n")
-	manifestDigest, err := manifest.Digest(man)
+	// Try to get digest algorithm from storage destination, fallback to canonical
+	var manifestDigest digest.Digest
+	// Use the storage transport to detect storage references and get digest algorithm
+	logrus.Debugf("Copy destination transport: %s", ic.c.dest.Reference().Transport().Name())
+	if ic.c.dest.Reference().Transport().Name() == "containers-storage" {
+		// Try to get digest algorithm from the reference's store using reflection
+		if refValue := reflect.ValueOf(ic.c.dest.Reference()); refValue.IsValid() {
+			if getDigestAlgMethod := refValue.MethodByName("GetDigestAlgorithm"); getDigestAlgMethod.IsValid() {
+				results := getDigestAlgMethod.Call(nil)
+				if len(results) > 0 && results[0].IsValid() {
+					if algorithm, ok := results[0].Interface().(digest.Algorithm); ok {
+						logrus.Debugf("Using storage reference digest algorithm for manifest: %s", algorithm)
+						manifestDigest, err = manifest.DigestWithAlgorithm(man, algorithm)
+					} else {
+						logrus.Debugf("Failed to extract digest algorithm, using canonical digest")
+						manifestDigest, err = manifest.Digest(man)
+					}
+				} else {
+					logrus.Debugf("GetDigestAlgorithm returned invalid result, using canonical digest")
+					manifestDigest, err = manifest.Digest(man)
+				}
+			} else {
+				logrus.Debugf("GetDigestAlgorithm method not found, using canonical digest")
+				manifestDigest, err = manifest.Digest(man)
+			}
+		} else {
+			logrus.Debugf("Reference reflection failed, using canonical digest")
+			manifestDigest, err = manifest.Digest(man)
+		}
+	} else {
+		logrus.Debugf("Non-storage transport, using canonical digest")
+		manifestDigest, err = manifest.Digest(man)
+	}
 	if err != nil {
 		return nil, "", err
 	}

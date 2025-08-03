@@ -526,8 +526,9 @@ func (b *Builder) Commit(ctx context.Context, dest types.ImageReference, options
 	}
 
 	// Calculate the as-written digest of the image's manifest and build the digested
-	// reference for the image.
-	manifestDigest, err := manifest.Digest(manifestBytes)
+	// reference for the image. Use the store's configured digest algorithm for agility.
+	digestAlgorithm := b.store.GetDigestAlgorithm()
+	manifestDigest, err := manifest.DigestWithAlgorithm(manifestBytes, digestAlgorithm)
 	if err != nil {
 		return imgID, nil, "", fmt.Errorf("computing digest of manifest of new image %q: %w", transports.ImageName(dest), err)
 	}

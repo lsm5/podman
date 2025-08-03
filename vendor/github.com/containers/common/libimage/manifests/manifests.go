@@ -201,7 +201,7 @@ func (l *list) SaveToImage(store storage.Store, imageID string, names []string, 
 	if err != nil {
 		return "", err
 	}
-	manifestDigest, err := manifest.Digest(manifestBytes)
+	manifestDigest, err := manifest.DigestWithAlgorithm(manifestBytes, store.GetDigestAlgorithm())
 	if err != nil {
 		return "", err
 	}
@@ -470,7 +470,7 @@ func (l *list) Push(ctx context.Context, dest types.ImageReference, options Push
 		var digest digest.Digest
 		var err error
 		if manifestBytes, err = cp.Image(ctx, policyContext, dest, src, opts); err == nil {
-			if digest, err = manifest.Digest(manifestBytes); err == nil {
+			if digest, err = manifest.DigestWithAlgorithm(manifestBytes, options.Store.GetDigestAlgorithm()); err == nil {
 				manifestDigest = digest
 			}
 		}

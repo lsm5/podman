@@ -1505,7 +1505,7 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 	// Set up to save the options.UnparsedToplevel's manifest if it differs from
 	// the per-platform one, which is saved below.
 	if !bytes.Equal(toplevelManifest, s.manifest) {
-		manifestDigest, err := manifest.Digest(toplevelManifest)
+		manifestDigest, err := manifest.DigestWithAlgorithm(toplevelManifest, s.imageRef.transport.store.GetDigestAlgorithm())
 		if err != nil {
 			return fmt.Errorf("digesting top-level manifest: %w", err)
 		}
@@ -1596,7 +1596,10 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 		// been present with new values, when ideally we'd find a way
 		// to merge them since they all apply to the same image
 		for _, data := range imgOptions.BigData {
-			if err := s.imageRef.transport.store.SetImageBigData(img.ID, data.Key, data.Data, manifest.Digest); err != nil {
+			digestFunc := func(bytes []byte) (digest.Digest, error) {
+				return manifest.DigestWithAlgorithm(bytes, s.imageRef.transport.store.GetDigestAlgorithm())
+			}
+			if err := s.imageRef.transport.store.SetImageBigData(img.ID, data.Key, data.Data, digestFunc); err != nil {
 				logrus.Debugf("error saving big data %q for image %q: %v", data.Key, img.ID, err)
 				return fmt.Errorf("saving big data %q for image %q: %w", data.Key, img.ID, err)
 			}
@@ -1654,7 +1657,7 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 
 // PutManifest writes the manifest to the destination.
 func (s *storageImageDestination) PutManifest(ctx context.Context, manifestBlob []byte, instanceDigest *digest.Digest) error {
-	digest, err := manifest.Digest(manifestBlob)
+	digest, err := manifest.DigestWithAlgorithm(manifestBlob, s.imageRef.transport.store.GetDigestAlgorithm())
 	if err != nil {
 		return err
 	}

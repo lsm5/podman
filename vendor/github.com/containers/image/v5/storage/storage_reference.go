@@ -321,3 +321,10 @@ func ResolveReference(ref types.ImageReference) (types.ImageReference, *storage.
 	}
 	return clone, img, nil
 }
+
+// GetDigestAlgorithm returns the digest algorithm from the reference's store.
+func (s storageReference) GetDigestAlgorithm() digest.Algorithm {
+	alg := s.transport.store.GetDigestAlgorithm()
+	logrus.Debugf("StorageReference GetDigestAlgorithm: %s (store digest type: %s)", alg, s.transport.store.GetDigestType())
+	return alg
+}

@@ -599,7 +599,13 @@ func (ir *ImageEngine) Config(_ context.Context) (*config.Config, error) {
 }
 
 func (ir *ImageEngine) Build(ctx context.Context, containerFiles []string, opts entities.BuildOptions) (*entities.BuildReport, error) {
-	id, _, err := ir.Libpod.Build(ctx, opts.BuildOptions, containerFiles...)
+	// Handle digest algorithm configuration
+	if opts.DigestAlgorithm != "" {
+		logrus.Debugf("Using digest algorithm for build operation: %s", opts.DigestAlgorithm)
+	}
+
+	// Use the new BuildWithDigest method that supports digest algorithm override
+	id, _, err := ir.Libpod.BuildWithDigest(ctx, opts.BuildOptions, opts.DigestAlgorithm, containerFiles...)
 	if err != nil {
 		return nil, err
 	}

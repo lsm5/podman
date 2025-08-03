@@ -2119,7 +2119,7 @@ func (s *StageExecutor) tagExistingImage(ctx context.Context, cacheID, output st
 	if err != nil {
 		return "", nil, fmt.Errorf("copying image %q: %w", cacheID, err)
 	}
-	manifestDigest, err := manifest.Digest(manifestBytes)
+	manifestDigest, err := manifest.DigestWithAlgorithm(manifestBytes, s.executor.store.GetDigestAlgorithm())
 	if err != nil {
 		return "", nil, fmt.Errorf("computing digest of manifest for image %q: %w", cacheID, err)
 	}
