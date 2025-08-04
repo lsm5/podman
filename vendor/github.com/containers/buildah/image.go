@@ -530,7 +530,7 @@ func (mb *dockerSchema2ManifestBuilder) manifestAndConfig() ([]byte, []byte, err
 	logrus.Debugf("Docker v2s2 config = %s", dconfig)
 
 	// Add the configuration blob to the manifest.
-	mb.dmanifest.Config.Digest = digest.Canonical.FromBytes(dconfig)
+	mb.dmanifest.Config.Digest = mb.i.store.GetDigestAlgorithm().FromBytes(dconfig)
 	mb.dmanifest.Config.Size = int64(len(dconfig))
 	mb.dmanifest.Config.MediaType = manifest.DockerV2Schema2ConfigMediaType
 
@@ -767,7 +767,7 @@ func (mb *ociManifestBuilder) manifestAndConfig() ([]byte, []byte, error) {
 	logrus.Debugf("OCIv1 config = %s", oconfig)
 
 	// Add the configuration blob to the manifest.
-	mb.omanifest.Config.Digest = digest.Canonical.FromBytes(oconfig)
+	mb.omanifest.Config.Digest = mb.i.store.GetDigestAlgorithm().FromBytes(oconfig)
 	mb.omanifest.Config.Size = int64(len(oconfig))
 	mb.omanifest.Config.MediaType = v1.MediaTypeImageConfig
 
@@ -1088,7 +1088,7 @@ func (i *containerImageRef) NewImageSource(_ context.Context, _ *types.SystemCon
 		names:         i.names,
 		compression:   i.compression,
 		config:        config,
-		configDigest:  digest.Canonical.FromBytes(config),
+		configDigest:  i.store.GetDigestAlgorithm().FromBytes(config),
 		manifest:      imageManifest,
 		manifestType:  i.preferredManifestType,
 		blobDirectory: i.blobDirectory,

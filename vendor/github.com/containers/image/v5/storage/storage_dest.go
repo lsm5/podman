@@ -1499,7 +1499,7 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 		imgOptions.BigData = append(imgOptions.BigData, storage.ImageBigDataOption{
 			Key:    s.lockProtected.configDigest.String(),
 			Data:   v,
-			Digest: digest.Canonical.FromBytes(v),
+			Digest: s.imageRef.transport.store.GetDigestAlgorithm().FromBytes(v),
 		})
 	}
 	// Set up to save the options.UnparsedToplevel's manifest if it differs from
