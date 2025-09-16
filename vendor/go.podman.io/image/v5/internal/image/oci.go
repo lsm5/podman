@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	ociencspec "github.com/containers/ocicrypt/spec"
-	"github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/internal/iolimits"
@@ -74,9 +73,12 @@ func (m *manifestOCI1) ConfigBlob(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		computedDigest := digest.FromBytes(blob)
-		if computedDigest != m.m.Config.Digest {
-			return nil, fmt.Errorf("Download config.json digest %s does not match expected %s", computedDigest, m.m.Config.Digest)
+		// Use the same algorithm as the expected digest
+		expectedDigest := m.m.Config.Digest
+		algorithm := expectedDigest.Algorithm()
+		computedDigest := algorithm.FromBytes(blob)
+		if computedDigest != expectedDigest {
+			return nil, fmt.Errorf("Download config.json digest %s does not match expected %s", computedDigest, expectedDigest)
 		}
 		m.configBlob = blob
 	}
@@ -288,7 +290,7 @@ func (m *manifestOCI1) convertToManifestSchema2(_ context.Context, options *type
 		case imgspecv1.MediaTypeImageLayerGzip:
 			layers[idx].MediaType = manifest.DockerV2Schema2LayerMediaType
 		case imgspecv1.MediaTypeImageLayerZstd:
-			return nil, fmt.Errorf("Error during manifest conversion: %q: zstd compression is not supported for docker images", layers[idx].MediaType)
+			return nil, fmt.Errorf("Error during manifest conversion: %q: zstd compression is not officially supported for docker images", layers[idx].MediaType)
 		case ociencspec.MediaTypeLayerEnc, ociencspec.MediaTypeLayerGzipEnc, ociencspec.MediaTypeLayerZstdEnc,
 			ociencspec.MediaTypeLayerNonDistributableEnc, ociencspec.MediaTypeLayerNonDistributableGzipEnc, ociencspec.MediaTypeLayerNonDistributableZstdEnc:
 			return nil, fmt.Errorf("during manifest conversion: encrypted layers (%q) are not supported in docker images", layers[idx].MediaType)
