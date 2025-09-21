@@ -11,9 +11,11 @@ import (
 	"github.com/containers/buildah/imagebuildah"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/libpod/events"
+	digest "github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 	"go.podman.io/common/libimage"
 	"go.podman.io/image/v5/docker/reference"
+	"go.podman.io/storage"
 )
 
 // Runtime API
@@ -115,6 +117,11 @@ func (r *Runtime) newImageBuildCompleteEvent(idOrName string) {
 
 // Build adds the runtime to the imagebuildah call
 func (r *Runtime) Build(ctx context.Context, options buildahDefine.BuildOptions, dockerfiles ...string) (string, reference.Canonical, error) {
+	return r.BuildWithDigest(ctx, options, "", dockerfiles...)
+}
+
+// BuildWithDigest adds the runtime to the imagebuildah call with optional digest algorithm override
+func (r *Runtime) BuildWithDigest(ctx context.Context, options buildahDefine.BuildOptions, digestAlgorithm string, dockerfiles ...string) (string, reference.Canonical, error) {
 	if options.Runtime == "" {
 		options.Runtime = r.GetOCIRuntimePath()
 	}
@@ -122,7 +129,40 @@ func (r *Runtime) Build(ctx context.Context, options buildahDefine.BuildOptions,
 
 	// share the network interface between podman and buildah
 	options.NetworkInterface = r.network
-	id, ref, err := imagebuildah.BuildDockerfiles(ctx, r.store, options, dockerfiles...)
+
+	// Determine which store to use for the build
+	var buildStore storage.Store
+
+	if digestAlgorithm != "" && digestAlgorithm != r.libimageRuntime.GetDigestAlgorithm().String() {
+		// Temporarily modify the digest algorithm for the build
+		originalDigestAlgorithm := r.libimageRuntime.GetDigestAlgorithm()
+		logrus.Debugf("Temporarily setting digest algorithm from %s to %s", originalDigestAlgorithm.String(), digestAlgorithm)
+		// Parse the digest algorithm string to digest.Algorithm
+		algorithm := digest.Algorithm(digestAlgorithm)
+		if algorithm != digest.SHA256 && algorithm != digest.SHA512 {
+			return "", nil, fmt.Errorf("unsupported digest algorithm: %s", digestAlgorithm)
+		}
+		r.libimageRuntime.SetDigestAlgorithm(algorithm)
+
+		// Ensure we restore the original digest algorithm even if build fails
+		defer func() {
+			r.libimageRuntime.SetDigestAlgorithm(originalDigestAlgorithm)
+			logrus.Debugf("Restored digest algorithm to %s", originalDigestAlgorithm.String())
+		}()
+
+		buildStore = r.store
+	} else {
+		// Use the existing store
+		buildStore = r.store
+		if digestAlgorithm != "" {
+			logrus.Debugf("Using existing store digest algorithm: %s (matches requested)", digestAlgorithm)
+		}
+	}
+
+	// Note: Stores created by storage.GetStore() are automatically managed
+	// by the storage library and don't require explicit cleanup
+
+	id, ref, err := imagebuildah.BuildDockerfiles(ctx, buildStore, options, dockerfiles...)
 	// Write event for build completion
 	r.newImageBuildCompleteEvent(id)
 	return id, ref, err
