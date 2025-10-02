@@ -11,6 +11,7 @@ import (
 	"github.com/containers/buildah/imagebuildah"
 	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/libpod/events"
+	digest "github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 	"go.podman.io/common/libimage"
 	"go.podman.io/image/v5/docker/reference"
@@ -132,16 +133,21 @@ func (r *Runtime) BuildWithDigest(ctx context.Context, options buildahDefine.Bui
 	// Determine which store to use for the build
 	var buildStore storage.Store
 
-	if digestAlgorithm != "" && digestAlgorithm != r.store.GetDigestType() {
-		// Temporarily modify the store's digest type for the build
-		originalDigestType := r.store.GetDigestType()
-		logrus.Debugf("Temporarily setting store digest algorithm from %s to %s", originalDigestType, digestAlgorithm)
-		r.store.SetDigestType(digestAlgorithm)
+	if digestAlgorithm != "" && digestAlgorithm != r.store.GetDigestAlgorithm().String() {
+		// Temporarily modify the store's digest algorithm for the build
+		originalDigestAlgorithm := r.store.GetDigestAlgorithm()
+		logrus.Debugf("Temporarily setting store digest algorithm from %s to %s", originalDigestAlgorithm.String(), digestAlgorithm)
+		// Parse the digest algorithm string to digest.Algorithm
+		algorithm := digest.Algorithm(digestAlgorithm)
+		if algorithm != digest.SHA256 && algorithm != digest.SHA512 {
+			return "", nil, fmt.Errorf("unsupported digest algorithm: %s", digestAlgorithm)
+		}
+		r.store.SetDigestAlgorithm(algorithm)
 
-		// Ensure we restore the original digest type even if build fails
+		// Ensure we restore the original digest algorithm even if build fails
 		defer func() {
-			r.store.SetDigestType(originalDigestType)
-			logrus.Debugf("Restored store digest algorithm to %s", originalDigestType)
+			r.store.SetDigestAlgorithm(originalDigestAlgorithm)
+			logrus.Debugf("Restored store digest algorithm to %s", originalDigestAlgorithm.String())
 		}()
 
 		buildStore = r.store

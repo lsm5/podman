@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	ociencspec "github.com/containers/ocicrypt/spec"
-	"github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/internal/iolimits"
@@ -74,14 +73,10 @@ func (m *manifestOCI1) ConfigBlob(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Use the same digest algorithm as the expected digest for verification
+		// Use the same algorithm as the expected digest
 		expectedDigest := m.m.Config.Digest
-		var computedDigest digest.Digest
-		if expectedDigest != "" && expectedDigest.Algorithm().Available() {
-			computedDigest = expectedDigest.Algorithm().FromBytes(blob)
-		} else {
-			computedDigest = digest.FromBytes(blob)
-		}
+		algorithm := expectedDigest.Algorithm()
+		computedDigest := algorithm.FromBytes(blob)
 		if computedDigest != expectedDigest {
 			return nil, fmt.Errorf("Download config.json digest %s does not match expected %s", computedDigest, expectedDigest)
 		}

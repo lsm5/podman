@@ -458,10 +458,9 @@ func (ir *ImageEngine) Push(ctx context.Context, source string, destination stri
 			}
 		}
 
-		manifestDigest, err := manifest.DigestWithAlgorithm(pushedManifestBytes, digestAlgorithm)
-		if err != nil {
-			return nil, err
-		}
+		// Compute manifest digest using the specified algorithm
+		algorithm := digest.Algorithm(digestAlgorithm)
+		manifestDigest := algorithm.FromBytes(pushedManifestBytes)
 		return &entities.ImagePushReport{ManifestDigest: manifestDigest.String()}, nil
 	}
 	// If the image could not be found, we may be referring to a manifest
