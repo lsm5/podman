@@ -118,10 +118,8 @@ func DefineBuildFlags(cmd *cobra.Command, buildOpts *BuildFlagsWrapper, isFarmBu
 	completion.CompleteCommandFlags(cmd, fromAndBudFlagsCompletions)
 	flags.SetNormalizeFunc(buildahCLI.AliasFlags)
 
-	// Digest algorithm flag
-	digestFlagName := "digest"
-	flags.StringVar(&buildOpts.DigestAlgorithm, digestFlagName, "", "Digest algorithm to use for content addressing (sha256, sha512). Defaults to value from storage.conf or sha256")
-	_ = cmd.RegisterFlagCompletionFunc(digestFlagName, completion.AutocompleteNone)
+	// Digest algorithm flag is already defined in buildah CLI flags
+	// No need to redefine it here
 	if registry.IsRemote() {
 		// Unset the isolation default as we never want to send this over the API
 		// as it can be wrong (root vs rootless).
@@ -269,6 +267,9 @@ func ParseBuildOpts(cmd *cobra.Command, args []string, buildOpts *BuildFlagsWrap
 	apiBuildOpts.BuildOptions = *buildahDefineOpts
 	apiBuildOpts.ContainerFiles = containerFiles
 	apiBuildOpts.Authfile = buildOpts.Authfile
+
+	// Copy digest algorithm from buildah CLI flags to podman build options
+	buildOpts.DigestAlgorithm = buildOpts.BudResults.DigestAlgorithm
 
 	// Validate and process digest algorithm
 	if buildOpts.DigestAlgorithm != "" {

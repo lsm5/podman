@@ -127,6 +127,12 @@ func pullFlags(cmd *cobra.Command) {
 	flags.String(retryDelayFlagName, registry.RetryDelayDefault(), "delay between retries in case of pull failures")
 	_ = cmd.RegisterFlagCompletionFunc(retryDelayFlagName, completion.AutocompleteNone)
 
+	digestFlagName := "digest"
+	flags.StringVar(&pullOptions.Digest, digestFlagName, "", "Specify the digest algorithm to use when pulling images (sha256, sha512)")
+	_ = cmd.RegisterFlagCompletionFunc(digestFlagName, func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"sha256", "sha512"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	if registry.IsRemote() {
 		_ = flags.MarkHidden(decryptionKeysFlagName)
 	} else {

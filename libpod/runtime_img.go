@@ -16,6 +16,7 @@ import (
 	"go.podman.io/common/libimage"
 	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/storage"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 // Runtime API
@@ -133,20 +134,20 @@ func (r *Runtime) BuildWithDigest(ctx context.Context, options buildahDefine.Bui
 	// Determine which store to use for the build
 	var buildStore storage.Store
 
-	if digestAlgorithm != "" && digestAlgorithm != r.libimageRuntime.GetDigestAlgorithm().String() {
+	if digestAlgorithm != "" && digestAlgorithm != supportedDigests.Get().String() {
 		// Temporarily modify the digest algorithm for the build
-		originalDigestAlgorithm := r.libimageRuntime.GetDigestAlgorithm()
+		originalDigestAlgorithm := supportedDigests.Get()
 		logrus.Debugf("Temporarily setting digest algorithm from %s to %s", originalDigestAlgorithm.String(), digestAlgorithm)
 		// Parse the digest algorithm string to digest.Algorithm
 		algorithm := digest.Algorithm(digestAlgorithm)
 		if algorithm != digest.SHA256 && algorithm != digest.SHA512 {
 			return "", nil, fmt.Errorf("unsupported digest algorithm: %s", digestAlgorithm)
 		}
-		r.libimageRuntime.SetDigestAlgorithm(algorithm)
+		supportedDigests.Set(algorithm)
 
 		// Ensure we restore the original digest algorithm even if build fails
 		defer func() {
-			r.libimageRuntime.SetDigestAlgorithm(originalDigestAlgorithm)
+			supportedDigests.Set(originalDigestAlgorithm)
 			logrus.Debugf("Restored digest algorithm to %s", originalDigestAlgorithm.String())
 		}()
 

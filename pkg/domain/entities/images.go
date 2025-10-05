@@ -79,6 +79,8 @@ type ImagePullOptions struct {
 	// OciDecryptConfig contains the config that can be used to decrypt an image if it is
 	// encrypted if non-nil. If nil, it does not attempt to decrypt an image.
 	OciDecryptConfig *encconfig.DecryptConfig
+	// Digest specifies the digest algorithm to use when pulling images (sha256, sha512)
+	Digest string
 }
 
 // ImagePullReport is the response from pulling one or more images.

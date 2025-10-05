@@ -41,8 +41,8 @@ import (
 	"go.podman.io/image/v5/signature"
 	"go.podman.io/image/v5/transports"
 	"go.podman.io/image/v5/transports/alltransports"
-	imgtypes "go.podman.io/image/v5/types"
 	"go.podman.io/storage"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 	"go.podman.io/storage/pkg/unshare"
 	"go.podman.io/storage/types"
 )
@@ -312,58 +312,44 @@ func (ir *ImageEngine) Pull(ctx context.Context, rawImage string, options entiti
 	// Detect and set the digest algorithm before pulling to ensure consistent digest computation
 	var digestAlgorithm digest.Algorithm = digest.Canonical // Default fallback to SHA256
 
-	// Try to detect the digest algorithm from the source image
-	if sourceImage, _, err := ir.Libpod.LibimageRuntime().LookupImage(rawImage, nil); err == nil {
-		imageID := sourceImage.ID()
-		// Detect digest algorithm from image ID length
-		// SHA256 = 64 chars, SHA512 = 128 chars
-		switch len(imageID) {
-		case 64:
+	// If digest algorithm is explicitly specified, use it
+	if options.Digest != "" {
+		switch options.Digest {
+		case "sha256":
 			digestAlgorithm = digest.SHA256
-			logrus.Debugf("Pull: Auto-detected SHA256 from source image ID length")
-		case 128:
+			logrus.Debugf("Pull: Using explicitly specified SHA256 digest algorithm")
+		case "sha512":
 			digestAlgorithm = digest.SHA512
-			logrus.Debugf("Pull: Auto-detected SHA512 from source image ID length")
+			logrus.Debugf("Pull: Using explicitly specified SHA512 digest algorithm")
 		default:
-			logrus.Debugf("Pull: Unknown image ID length %d, using default %s", len(imageID), digestAlgorithm.String())
+			return nil, fmt.Errorf("unsupported digest algorithm: %s (supported: sha256, sha512)", options.Digest)
 		}
 	} else {
-		// If we can't lookup the source image (it's remote), try to detect from the manifest
-		// by making a HEAD request to get the manifest digest
-		logrus.Debugf("Pull: Could not lookup source image %s for digest algorithm detection: %v", rawImage, err)
+		// Try to detect the digest algorithm from the source image
+		digestAlgorithm = ir.detectDigestAlgorithmFromSource(ctx, rawImage, digestAlgorithm)
 
-		// Try to detect from the remote manifest digest
-		if ref, err := alltransports.ParseImageName(rawImage); err == nil {
-			if manifestDigest, err := docker.GetDigest(ctx, ir.Libpod.SystemContext(), ref); err == nil {
-				switch manifestDigest.Algorithm() {
-				case digest.SHA256:
-					digestAlgorithm = digest.SHA256
-					logrus.Debugf("Pull: Auto-detected SHA256 from remote manifest digest")
-				case digest.SHA512:
-					digestAlgorithm = digest.SHA512
-					logrus.Debugf("Pull: Auto-detected SHA512 from remote manifest digest")
-				default:
-					logrus.Debugf("Pull: Unknown manifest digest algorithm %s, using default %s", manifestDigest.Algorithm().String(), digestAlgorithm.String())
-				}
-			}
+		// Try to detect from the remote manifest for registry pulls
+		// This is optional - if it fails, we'll use the algorithm detected from the source image
+		detectedAlgorithm := ir.detectDigestAlgorithmFromRemoteManifest(ctx, rawImage, options, digestAlgorithm)
+		if detectedAlgorithm != digestAlgorithm {
+			digestAlgorithm = detectedAlgorithm
 		}
 	}
 
-	// Set the global digest algorithm before pulling
-	originalAlgorithm := imgtypes.GetDigestAlgorithm()
-	if digestAlgorithm != originalAlgorithm {
-		logrus.Debugf("Pull: Setting digest algorithm from %s to %s", originalAlgorithm.String(), digestAlgorithm.String())
-		if err := imgtypes.SetDigestAlgorithm(digestAlgorithm); err != nil {
+	// Set the digest algorithm before pulling
+	// Note: We don't restore the algorithm after the pull because the digest
+	// computation happens during and after the pull operation
+	if digestAlgorithm != supportedDigests.Get() {
+		logrus.Debugf("Pull: Setting digest algorithm from %s to %s", supportedDigests.Get().String(), digestAlgorithm.String())
+		if err := supportedDigests.Set(digestAlgorithm); err != nil {
 			logrus.Warnf("Failed to set digest algorithm to %s: %v", digestAlgorithm.String(), err)
-		} else {
-			// Restore original algorithm after pull
-			defer func() {
-				if err := imgtypes.SetDigestAlgorithm(originalAlgorithm); err != nil {
-					logrus.Warnf("Failed to restore digest algorithm to %s: %v", originalAlgorithm.String(), err)
-				}
-			}()
 		}
+	} else {
+		logrus.Debugf("Pull: Digest algorithm already set to %s", digestAlgorithm.String())
 	}
+
+	// Verify the algorithm is set correctly
+	logrus.Debugf("Pull: Current digest algorithm after setting: %s", supportedDigests.Get().String())
 
 	pulledImages, err := ir.Libpod.LibimageRuntime().Pull(ctx, rawImage, options.PullPolicy, pullOptions)
 	if err != nil {
@@ -499,15 +485,15 @@ func (ir *ImageEngine) Push(ctx context.Context, source string, destination stri
 	}
 
 	// Set the global digest algorithm before pushing
-	originalAlgorithm := imgtypes.GetDigestAlgorithm()
+	originalAlgorithm := supportedDigests.Get()
 	if digestAlgorithm != originalAlgorithm {
 		logrus.Debugf("Push: Setting digest algorithm from %s to %s", originalAlgorithm.String(), digestAlgorithm.String())
-		if err := imgtypes.SetDigestAlgorithm(digestAlgorithm); err != nil {
+		if err := supportedDigests.Set(digestAlgorithm); err != nil {
 			logrus.Warnf("Failed to set digest algorithm to %s: %v", digestAlgorithm.String(), err)
 		} else {
 			// Restore original algorithm after push
 			defer func() {
-				if err := imgtypes.SetDigestAlgorithm(originalAlgorithm); err != nil {
+				if err := supportedDigests.Set(originalAlgorithm); err != nil {
 					logrus.Warnf("Failed to restore digest algorithm to %s: %v", originalAlgorithm.String(), err)
 				}
 			}()
@@ -1109,4 +1095,103 @@ func putSignature(manifestBlob []byte, mech signature.SigningMechanism, sigStore
 		return err
 	}
 	return os.WriteFile(filepath.Join(signatureDir, sigFilename), newSig, 0644)
+}
+
+// detectDigestAlgorithmFromSource attempts to detect the digest algorithm from a local source image
+func (ir *ImageEngine) detectDigestAlgorithmFromSource(ctx context.Context, rawImage string, currentAlgorithm digest.Algorithm) digest.Algorithm {
+	if sourceImage, _, err := ir.Libpod.LibimageRuntime().LookupImage(rawImage, nil); err == nil {
+		imageID := sourceImage.ID()
+		// Detect digest algorithm from image ID length
+		// SHA256 = 64 chars, SHA512 = 128 chars
+		switch len(imageID) {
+		case 64:
+			logrus.Debugf("Pull: Auto-detected SHA256 from source image ID length")
+			return digest.SHA256
+		case 128:
+			logrus.Debugf("Pull: Auto-detected SHA512 from source image ID length")
+			return digest.SHA512
+		default:
+			logrus.Debugf("Pull: Unknown image ID length %d, using current %s", len(imageID), currentAlgorithm.String())
+			return currentAlgorithm
+		}
+	} else {
+		logrus.Debugf("Pull: Could not lookup source image %s for digest algorithm detection: %v", rawImage, err)
+		return currentAlgorithm
+	}
+}
+
+// detectDigestAlgorithmFromRemoteManifest attempts to detect the digest algorithm from a remote manifest's config blob digest
+func (ir *ImageEngine) detectDigestAlgorithmFromRemoteManifest(ctx context.Context, rawImage string, options entities.ImagePullOptions, currentAlgorithm digest.Algorithm) digest.Algorithm {
+	logrus.Debugf("Pull: Attempting to detect digest algorithm from remote manifest for %s", rawImage)
+
+	// Ensure the image name has a transport prefix for parsing
+	imageName := rawImage
+	if !strings.Contains(imageName, "://") {
+		imageName = "docker://" + imageName
+	}
+
+	ref, err := alltransports.ParseImageName(imageName)
+	if err != nil {
+		logrus.Debugf("Pull: Failed to parse image name: %v", err)
+		return currentAlgorithm
+	}
+
+	logrus.Debugf("Pull: Successfully parsed image name: %s", rawImage)
+
+	// Get the manifest to inspect the config blob digest
+	srcRef, err := docker.NewReference(ref.DockerReference())
+	if err != nil {
+		logrus.Debugf("Pull: Failed to create docker reference: %v", err)
+		return currentAlgorithm
+	}
+
+	logrus.Debugf("Pull: Successfully created docker reference")
+
+	// Use the system context (TLS verify settings are handled by pullOptions)
+	systemContext := ir.Libpod.SystemContext()
+	src, err := srcRef.NewImageSource(ctx, systemContext)
+	if err != nil {
+		logrus.Debugf("Pull: Failed to create image source (will use source image algorithm): %v", err)
+		return currentAlgorithm
+	}
+	defer src.Close()
+
+	logrus.Debugf("Pull: Successfully created image source")
+
+	manifestBlob, _, err := src.GetManifest(ctx, nil)
+	if err != nil {
+		logrus.Debugf("Pull: Failed to get manifest: %v", err)
+		return currentAlgorithm
+	}
+
+	logrus.Debugf("Pull: Successfully retrieved manifest blob (%d bytes)", len(manifestBlob))
+
+	// Parse the manifest to get the config blob digest
+	man, err := manifest.FromBlob(manifestBlob, manifest.GuessMIMEType(manifestBlob))
+	if err != nil {
+		logrus.Debugf("Pull: Failed to parse manifest: %v", err)
+		return currentAlgorithm
+	}
+
+	logrus.Debugf("Pull: Successfully parsed manifest")
+
+	configInfo := man.ConfigInfo()
+	if configInfo.Digest == "" {
+		logrus.Debugf("Pull: No config blob digest found in manifest")
+		return currentAlgorithm
+	}
+
+	logrus.Debugf("Pull: Config blob digest: %s", configInfo.Digest.String())
+
+	switch configInfo.Digest.Algorithm() {
+	case digest.SHA256:
+		logrus.Debugf("Pull: Auto-detected SHA256 from remote config blob digest")
+		return digest.SHA256
+	case digest.SHA512:
+		logrus.Debugf("Pull: Auto-detected SHA512 from remote config blob digest")
+		return digest.SHA512
+	default:
+		logrus.Debugf("Pull: Unknown config blob digest algorithm %s, using current %s", configInfo.Digest.Algorithm().String(), currentAlgorithm.String())
+		return currentAlgorithm
+	}
 }

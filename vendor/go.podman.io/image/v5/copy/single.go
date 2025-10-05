@@ -28,6 +28,7 @@ import (
 	"go.podman.io/image/v5/transports"
 	"go.podman.io/image/v5/types"
 	chunkedToc "go.podman.io/storage/pkg/chunked/toc"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 // imageCopier tracks state specific to a single image (possibly an item of a manifest list)
@@ -954,7 +955,7 @@ func (ic *imageCopier) copyLayerFromStream(ctx context.Context, srcStream io.Rea
 			//
 			// If this gets never called, pipeReader will not be used anywhere, but pipeWriter will only be
 			// closed above, so we are happy enough with both pipeReader and pipeWriter to just get collected by GC.
-			go diffIDComputationGoroutine(diffIDChan, pipeReader, decompressor, ic.c.dest) // Closes pipeReader
+			go diffIDComputationGoroutine(diffIDChan, pipeReader, decompressor) // Closes pipeReader
 			return pipeWriter
 		}
 	}
@@ -965,7 +966,7 @@ func (ic *imageCopier) copyLayerFromStream(ctx context.Context, srcStream io.Rea
 }
 
 // diffIDComputationGoroutine reads all input from layerStream, uncompresses using decompressor if necessary, and sends its digest, and status, if any, to dest.
-func diffIDComputationGoroutine(dest chan<- diffIDResult, layerStream io.ReadCloser, decompressor compressiontypes.DecompressorFunc, imageDest private.ImageDestination) {
+func diffIDComputationGoroutine(dest chan<- diffIDResult, layerStream io.ReadCloser, decompressor compressiontypes.DecompressorFunc) {
 	result := diffIDResult{
 		digest: "",
 		err:    errors.New("Internal error: unexpected panic in diffIDComputationGoroutine"),
@@ -973,11 +974,11 @@ func diffIDComputationGoroutine(dest chan<- diffIDResult, layerStream io.ReadClo
 	defer func() { dest <- result }()
 	defer layerStream.Close() // We do not care to bother the other end of the pipe with other failures; we send them to dest instead.
 
-	result.digest, result.err = computeDiffID(layerStream, decompressor, imageDest)
+	result.digest, result.err = computeDiffID(layerStream, decompressor)
 }
 
 // computeDiffID reads all input from layerStream, uncompresses it using decompressor if necessary, and returns its digest.
-func computeDiffID(stream io.Reader, decompressor compressiontypes.DecompressorFunc, dest private.ImageDestination) (digest.Digest, error) {
+func computeDiffID(stream io.Reader, decompressor compressiontypes.DecompressorFunc) (digest.Digest, error) {
 	if decompressor != nil {
 		s, err := decompressor(stream)
 		if err != nil {
@@ -987,8 +988,8 @@ func computeDiffID(stream io.Reader, decompressor compressiontypes.DecompressorF
 		stream = s
 	}
 
-	// Use the destination's configured digest algorithm
-	algorithm := dest.GetDigestAlgorithm()
+	// Use the configured digest algorithm
+	algorithm := supportedDigests.Get()
 	return algorithm.FromReader(stream)
 }
 

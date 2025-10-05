@@ -26,6 +26,7 @@ import (
 	"go.podman.io/image/v5/transports/alltransports"
 	"go.podman.io/image/v5/types"
 	"go.podman.io/storage"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 // PullOptions allows for customizing image pulls.
@@ -263,7 +264,7 @@ func (r *Runtime) copyFromDefault(ctx context.Context, ref types.ImageReference,
 				return nil, nil, err
 			}
 			// Use the configured digest algorithm for the image name
-			digestAlgorithm := r.GetDigestAlgorithm()
+			digestAlgorithm := supportedDigests.Get()
 			imageName = digestAlgorithm.String() + ":" + storageName[1:]
 		} else { // If the OCI-reference includes an image reference, use it
 			storageName = refName
@@ -284,7 +285,7 @@ func (r *Runtime) copyFromDefault(ctx context.Context, ref types.ImageReference,
 				return nil, nil, err
 			}
 			// Use the configured digest algorithm for the image name
-			digestAlgorithm := r.GetDigestAlgorithm()
+			digestAlgorithm := supportedDigests.Get()
 			imageName = digestAlgorithm.String() + ":" + storageName[1:]
 		default:
 			named, err := NormalizeName(storageName)
@@ -312,7 +313,7 @@ func (r *Runtime) copyFromDefault(ctx context.Context, ref types.ImageReference,
 			return nil, nil, err
 		}
 		// Use the configured digest algorithm for the image name
-		digestAlgorithm := r.GetDigestAlgorithm()
+		digestAlgorithm := supportedDigests.Get()
 		imageName = digestAlgorithm.String() + ":" + storageName[1:]
 	}
 
@@ -348,7 +349,7 @@ func (r *Runtime) storageReferencesReferencesFromArchiveReader(ctx context.Conte
 		destNames = append(destNames, destName)
 		// Make sure the image can be loaded after the pull by
 		// replacing the @ with the configured digest algorithm.
-		digestAlgorithm := r.GetDigestAlgorithm()
+		digestAlgorithm := supportedDigests.Get()
 		imageNames = append(imageNames, digestAlgorithm.String()+":"+destName[1:])
 	} else {
 		for i := range destNames {

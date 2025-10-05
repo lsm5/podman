@@ -14,6 +14,7 @@ import (
 	"go.podman.io/common/pkg/download"
 	storageTransport "go.podman.io/image/v5/storage"
 	tarballTransport "go.podman.io/image/v5/tarball"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 // ImportOptions allow for customizing image imports.
@@ -129,6 +130,6 @@ func (r *Runtime) Import(ctx context.Context, path string, options *ImportOption
 	}
 
 	// Use the configured digest algorithm for the image ID
-	digestAlgorithm := r.GetDigestAlgorithm()
+	digestAlgorithm := supportedDigests.Get()
 	return digestAlgorithm.String() + ":" + name, nil
 }

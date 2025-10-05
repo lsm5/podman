@@ -123,11 +123,6 @@ func (d *dirImageDestination) Reference() types.ImageReference {
 	return d.ref
 }
 
-// GetDigestAlgorithm returns the digest algorithm configured for the destination.
-func (d *dirImageDestination) GetDigestAlgorithm() digest.Algorithm {
-	return types.GetDigestAlgorithm()
-}
-
 // Close removes resources associated with an initialized ImageDestination, if any.
 func (d *dirImageDestination) Close() error {
 	return nil

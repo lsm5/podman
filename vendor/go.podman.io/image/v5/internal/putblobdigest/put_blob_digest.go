@@ -5,6 +5,7 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	"go.podman.io/image/v5/types"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 // Digester computes a digest of the provided stream, if not known yet.
@@ -21,7 +22,7 @@ func newDigester(stream io.Reader, knownDigest digest.Digest, validDigest bool) 
 		return Digester{knownDigest: knownDigest}, stream
 	} else {
 		res := Digester{
-			digester: types.GetDigestAlgorithm().Digester(),
+			digester: supportedDigests.Get().Digester(),
 		}
 		stream = io.TeeReader(stream, res.digester.Hash())
 		return res, stream
@@ -43,7 +44,7 @@ func DigestIfUnknown(stream io.Reader, blobInfo types.BlobInfo) (Digester, io.Re
 // The caller MUST use the returned stream instead of the original value.
 func DigestIfCanonicalUnknown(stream io.Reader, blobInfo types.BlobInfo) (Digester, io.Reader) {
 	d := blobInfo.Digest
-	configuredAlgorithm := types.GetDigestAlgorithm()
+	configuredAlgorithm := supportedDigests.Get()
 	return newDigester(stream, d, d != "" && d.Algorithm() == configuredAlgorithm)
 }
 
