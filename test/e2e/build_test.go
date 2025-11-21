@@ -301,6 +301,50 @@ var _ = Describe("Podman build", func() {
 		Expect("sha256:" + data[0].ID).To(Equal(string(id)))
 	})
 
+	It("podman build basic alpine and print raw id to external file", func() {
+		// Switch to temp dir and restore it afterwards
+		cwd, err := os.Getwd()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.Chdir(os.TempDir())).To(Succeed())
+		defer Expect(os.Chdir(cwd)).To(BeNil())
+
+		targetFile := filepath.Join(podmanTest.TempDir, "idFileRaw")
+
+		session := podmanTest.Podman([]string{"build", "--pull-never", "build/basicalpine", "--iidfile-raw", targetFile})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		id, _ := os.ReadFile(targetFile)
+
+		// Verify that id is correct and does not contain sha256: prefix
+		Expect(string(id)).ToNot(ContainSubstring("sha256:"))
+		inspect := podmanTest.Podman([]string{"inspect", string(id)})
+		inspect.WaitWithDefaultTimeout()
+		data := inspect.InspectImageJSON()
+		Expect(data[0].ID).To(Equal(string(id)))
+	})
+
+	It("podman build basic alpine and print raw id to external file using alias", func() {
+		// Switch to temp dir and restore it afterwards
+		cwd, err := os.Getwd()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.Chdir(os.TempDir())).To(Succeed())
+		defer Expect(os.Chdir(cwd)).To(BeNil())
+
+		targetFile := filepath.Join(podmanTest.TempDir, "idFileRawAlias")
+
+		session := podmanTest.Podman([]string{"build", "--pull-never", "build/basicalpine", "--raw-iidfile", targetFile})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(ExitCleanly())
+		id, _ := os.ReadFile(targetFile)
+
+		// Verify that id is correct and does not contain sha256: prefix
+		Expect(string(id)).ToNot(ContainSubstring("sha256:"))
+		inspect := podmanTest.Podman([]string{"inspect", string(id)})
+		inspect.WaitWithDefaultTimeout()
+		data := inspect.InspectImageJSON()
+		Expect(data[0].ID).To(Equal(string(id)))
+	})
+
 	It("podman Test PATH and reserved annotation in built image", func() {
 		path := "/tmp:/bin:/usr/bin:/usr/sbin"
 		session := podmanTest.Podman([]string{
