@@ -14,6 +14,8 @@ Administrators can create a Quadlet in /etc/containers/systemd/users, which syst
 
 Optionally, the administrator can place Quadlet files in the /etc/containers/systemd/users/${UID} directory for a user. Only this UID will execute these Quadlet services when that user logs in.
 
+Alternatively, the administrator can place Quadlet files in the /etc/containers/systemd/groups/${GID} directory for a group. All users belonging to this group will execute these Quadlet services when they log in. User-specific quadlets in /etc/containers/systemd/users/${UID} will override group quadlets if both exist with the same filename.
+
 The user is confined to the container environment via all of the security mechanisms, including SELinux. The only information that will be available from the system comes from volumes leaked into the container.
 
 Systemd will automatically create the container when the user session is started. Systemd will take down the container when all connections to the user session are removed. This means users can log in to the system multiple times, with each session connected to the same container.
@@ -125,6 +127,38 @@ ExecStartPre=/usr/bin/mkdir -p %h/data
 RequiredBy=default.target
 _EOF
 ```
+
+Alternatively, while running as root, create a Quadlet for a group of users. All users belonging to the group will share this container environment.
+
+```
+# groupadd developers
+# usermod -aG developers user1
+# usermod -aG developers user2
+# GROUPID=$(getent group developers | cut -d: -f3)
+# mkdir -p /etc/containers/systemd/groups/${GROUPID}
+# cat > /etc/containers/systemd/groups/${GROUPID}/podmansh.container << _EOF
+[Unit]
+Description=The podmansh container for developers group
+After=local-fs.target
+
+[Container]
+Image=registry.fedoraproject.org/fedora
+ContainerName=podmansh
+RemapUsers=keep-id
+RunInit=yes
+
+Volume=%h/data:%h:Z
+Exec=sleep infinity
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p %h/data
+
+[Install]
+RequiredBy=default.target
+_EOF
+```
+
+Note: If a user has both a user-specific quadlet (/etc/containers/systemd/users/${UID}/podmansh.container) and a group quadlet (/etc/containers/systemd/groups/${GID}/podmansh.container), the user-specific quadlet will take precedence.
 
 ## SEE ALSO
 **[containers.conf(5)](containers.conf.5.md)**, **[podman(1)](podman.1.md)**, **[podman-exec(1)](podman-exec.1.md)**, **quadlet(5)**
