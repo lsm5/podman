@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	buildahDefine "github.com/containers/buildah/define"
+	"github.com/containers/common/pkg/auth"
 	"github.com/containers/podman/v4/cmd/podman/common"
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/pkg/domain/entities"
@@ -241,6 +242,13 @@ func build(cmd *cobra.Command, args []string) error {
 		}
 		if cmd.Flag("dns-search").Changed {
 			return errors.New("the --dns-search option cannot be used with --network=none")
+		}
+	}
+
+	// Validate authfile if specified
+	if cmd.Flag("authfile").Changed {
+		if err := auth.CheckAuthFile(buildOpts.Authfile); err != nil {
+			return err
 		}
 	}
 
