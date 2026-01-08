@@ -69,7 +69,23 @@ func copyFromContainerRemote(container string, containerPath string, hostPath st
 	}
 
 	// Extract tar to destination
-	if err := extractTar(reader, hostPath, containerInfo.IsDir); err != nil {
+	// When copying a directory to a non-existent destination, we need to strip
+	// the source directory name from tar entries. For example, when copying
+	// /srv to /newdir, the tar contains "srv/subdir/file" but we want to extract
+	// to "/newdir/subdir/file" not "/newdir/srv/subdir/file".
+	stripComponents := 0
+	if containerInfo.IsDir {
+		// Check if destination exists
+		if _, err := os.Stat(hostPath); os.IsNotExist(err) {
+			// Destination doesn't exist, strip the source directory name
+			// unless we're copying contents only (path ends with /.)
+			if !strings.HasSuffix(containerPath, "/.") {
+				stripComponents = 1
+			}
+		}
+	}
+
+	if err := extractTar(reader, hostPath, containerInfo.IsDir, stripComponents); err != nil {
 		return err
 	}
 
@@ -353,7 +369,7 @@ func createTar(sourcePath string, writer io.Writer) error {
 }
 
 // extractTar extracts a tar archive to the specified destination
-func extractTar(reader io.Reader, destPath string, isDir bool) error {
+func extractTar(reader io.Reader, destPath string, isDir bool, stripComponents int) error {
 	tr := tar.NewReader(reader)
 
 	// Check if destination exists
@@ -370,16 +386,28 @@ func extractTar(reader io.Reader, destPath string, isDir bool) error {
 			return err
 		}
 
+		// Strip leading path components if requested
+		name := header.Name
+		if stripComponents > 0 {
+			parts := strings.Split(filepath.Clean(name), string(filepath.Separator))
+			if len(parts) > stripComponents {
+				name = filepath.Join(parts[stripComponents:]...)
+			} else {
+				// Skip entries that would be completely stripped
+				continue
+			}
+		}
+
 		var target string
 		// If dest doesn't exist and we're extracting a single file, use dest as the filename
 		if !destExists && !isDir && header.Typeflag == tar.TypeReg {
 			target = destPath
 		} else if destIsDir {
 			// Dest is a directory, extract into it
-			target = filepath.Join(destPath, header.Name)
+			target = filepath.Join(destPath, name)
 		} else {
 			// Dest exists but isn't a directory, or we're extracting a directory
-			target = filepath.Join(destPath, header.Name)
+			target = filepath.Join(destPath, name)
 		}
 
 		switch header.Typeflag {
