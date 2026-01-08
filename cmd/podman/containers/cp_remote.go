@@ -68,6 +68,16 @@ func copyFromContainerRemote(container string, containerPath string, hostPath st
 		return err
 	}
 
+	// Validate: when copying a directory, destination must be a directory or non-existent
+	if containerInfo.IsDir {
+		if hostInfo, err := os.Stat(hostPath); err == nil {
+			// Destination exists, check if it's a directory
+			if !hostInfo.IsDir() {
+				return errors.New("destination must be a directory when copying a directory")
+			}
+		}
+	}
+
 	// Extract tar to destination
 	// When copying a directory to a non-existent destination, we need to strip
 	// the source directory name from tar entries. For example, when copying
