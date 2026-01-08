@@ -129,6 +129,11 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 
 	if err != nil {
 		// Container path doesn't exist (or is a broken symlink)
+		// If path has trailing /, it must be a directory (error if it doesn't exist)
+		if strings.HasSuffix(containerPath, "/") {
+			return fmt.Errorf("%q could not be found on container %s: %w", containerPath, container, err)
+		}
+
 		// If containerInfo is not nil, it's a symlink even if target doesn't exist
 		if containerInfo != nil && containerInfo.LinkTarget != "" {
 			// Broken symlink - treat like a file and use the symlink target
@@ -138,10 +143,6 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 			containerBaseName = filepath.Base(containerInfo.LinkTarget)
 		} else {
 			// Path truly doesn't exist
-			// If path has trailing /, it must be a directory (error if it doesn't exist)
-			if strings.HasSuffix(containerPath, "/") {
-				return fmt.Errorf("%q could not be found on container %s: %w", containerPath, container, err)
-			}
 			containerExists = false
 
 			// When copying from stdin or copying contents only (source ends with /.),
@@ -235,6 +236,11 @@ func copyBetweenContainersRemote(sourceContainer string, sourcePath string, dest
 
 	if err != nil {
 		// Destination path doesn't exist (or is a broken symlink)
+		// If path has trailing /, it must be a directory (error if it doesn't exist)
+		if strings.HasSuffix(destPath, "/") {
+			return fmt.Errorf("%q could not be found on container %s: %w", destPath, destContainer, err)
+		}
+
 		// If destInfo is not nil, it's a symlink even if target doesn't exist
 		if destInfo != nil && destInfo.LinkTarget != "" {
 			// Broken symlink - treat like a file and use the symlink target
@@ -244,10 +250,6 @@ func copyBetweenContainersRemote(sourceContainer string, sourcePath string, dest
 			destBaseName = filepath.Base(destInfo.LinkTarget)
 		} else {
 			// Path truly doesn't exist
-			// If path has trailing /, it must be a directory (error if it doesn't exist)
-			if strings.HasSuffix(destPath, "/") {
-				return fmt.Errorf("%q could not be found on container %s: %w", destPath, destContainer, err)
-			}
 			destExists = false
 
 			// If we're copying contents only (source ends with /.), use the dest path directly
