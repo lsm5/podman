@@ -25,7 +25,7 @@ func cp(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(sourceContainerStr) > 0 && len(destContainerStr) > 0 {
-		return errors.New("copying between containers is not supported with podman-remote")
+		return copyBetweenContainersRemote(sourceContainerStr, sourcePath, destContainerStr, destPath)
 	} else if len(sourceContainerStr) > 0 {
 		return copyFromContainerRemote(sourceContainerStr, sourcePath, destPath)
 	}
@@ -170,6 +170,97 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 	}
 
 	return tarErr
+}
+
+// copyBetweenContainersRemote copies from source container to destination container.
+func copyBetweenContainersRemote(sourceContainer string, sourcePath string, destContainer string, destPath string) error {
+	// Get the file info from the source container
+	sourceInfo, err := registry.ContainerEngine().ContainerStat(registry.GetContext(), sourceContainer, sourcePath)
+	if err != nil {
+		return fmt.Errorf("%q could not be found on container %s: %w", sourcePath, sourceContainer, err)
+	}
+
+	// Get info about the destination container path
+	destInfo, err := registry.ContainerEngine().ContainerStat(registry.GetContext(), destContainer, destPath)
+	var destExists bool
+	var destIsDir bool
+	var destResolvedToParentDir bool
+	var targetPath string
+	var destBaseName string
+
+	if err != nil {
+		// Destination path doesn't exist
+		// If path has trailing /, it must be a directory (error if it doesn't exist)
+		if strings.HasSuffix(destPath, "/") {
+			return fmt.Errorf("%q could not be found on container %s: %w", destPath, destContainer, err)
+		}
+		destExists = false
+
+		// If we're copying contents only (source ends with /.), use the dest path directly
+		if strings.HasSuffix(sourcePath, "/.") {
+			targetPath = destPath
+			destResolvedToParentDir = false
+		} else {
+			// Otherwise, use parent directory and rename
+			destResolvedToParentDir = true
+			targetPath = filepath.Dir(destPath)
+			destBaseName = filepath.Base(destPath)
+		}
+	} else {
+		destExists = true
+		destIsDir = destInfo.IsDir
+		if destIsDir {
+			// Destination is a directory - extract into it
+			targetPath = destPath
+		} else {
+			// Destination is a file - use parent directory
+			targetPath = filepath.Dir(destInfo.LinkTarget)
+			destBaseName = filepath.Base(destInfo.LinkTarget)
+		}
+	}
+
+	// Validate: can't copy directory to a file
+	if sourceInfo.IsDir && destExists && !destIsDir {
+		return errors.New("destination must be a directory when copying a directory")
+	}
+
+	reader, writer := io.Pipe()
+
+	// Copy from source container in a goroutine
+	var copyFromErr error
+	go func() {
+		defer writer.Close()
+		copyFunc, err := registry.ContainerEngine().ContainerCopyToArchive(registry.GetContext(), sourceContainer, sourceInfo.LinkTarget, writer)
+		if err != nil {
+			copyFromErr = err
+			return
+		}
+		copyFromErr = copyFunc()
+	}()
+
+	// Copy to destination container
+	defer reader.Close()
+
+	copyOptions := entities.CopyOptions{
+		Chown: chown,
+	}
+
+	// If we're copying to a non-existent path or file-to-file, use Rename
+	// But NOT when copying contents only (sourcePath ends with /.)
+	if ((!sourceInfo.IsDir && !destIsDir) || destResolvedToParentDir) && !strings.HasSuffix(sourcePath, "/.") {
+		copyOptions.Rename = map[string]string{filepath.Base(sourceInfo.LinkTarget): destBaseName}
+	}
+
+	copyFunc, err := registry.ContainerEngine().ContainerCopyFromArchive(registry.GetContext(), destContainer, targetPath, reader, copyOptions)
+	if err != nil {
+		return err
+	}
+
+	if err := copyFunc(); err != nil {
+		return err
+	}
+
+	return copyFromErr
 }
 
 // createTar creates a tar archive from the specified path
