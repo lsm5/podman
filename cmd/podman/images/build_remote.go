@@ -331,17 +331,56 @@ func build(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Parse security options into label and seccomp settings
+	var labelOpts []string
+	var seccompProfile string
+	for _, opt := range buildOpts.SecurityOpt {
+		if strings.HasPrefix(opt, "label=") {
+			labelOpts = append(labelOpts, strings.TrimPrefix(opt, "label="))
+		} else if strings.HasPrefix(opt, "seccomp=") {
+			seccompProfile = strings.TrimPrefix(opt, "seccomp=")
+		}
+	}
+
+	// Handle ignore file
+	var excludes []string
+	if buildOpts.IgnoreFile != "" {
+		var err error
+		excludes, err = parseDockerignore(buildOpts.IgnoreFile)
+		if err != nil {
+			return fmt.Errorf("unable to parse ignore file: %w", err)
+		}
+	}
+
+	// Handle logfile for client-side logging
+	var logfile *os.File
+	if buildOpts.Logfile != "" {
+		var err error
+		logfile, err = os.Create(buildOpts.Logfile)
+		if err != nil {
+			return fmt.Errorf("failed to create logfile: %w", err)
+		}
+		defer logfile.Close()
+	}
+
 	opts := entities.BuildOptions{
 		BuildOptions: buildahDefine.BuildOptions{
 			CommonBuildOpts: &buildahDefine.CommonBuildOptions{
-				Ulimit: buildOpts.Ulimit,
+				DNSSearch:          buildOpts.DNSSearch,
+				DNSServers:         buildOpts.DNSServers,
+				DNSOptions:         buildOpts.DNSOptions,
+				LabelOpts:          labelOpts,
+				SeccompProfilePath: seccompProfile,
+				Ulimit:             buildOpts.Ulimit,
 			},
 			AdditionalTags:          tags,
 			Args:                    buildArgs,
 			ContextDirectory:        contextDir,
+			Excludes:                excludes,
 			ForceRmIntermediateCtrs: buildOpts.ForceRm,
 			Layers:                  layers,
 			NoCache:                 buildOpts.NoCache,
+			Out:                     logfile,
 			Output:                  output,
 			PullPolicy:              pullPolicy,
 			Quiet:                   buildOpts.Quiet,
@@ -363,4 +402,20 @@ func build(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// parseDockerignore reads and parses the ignore file
+func parseDockerignore(ignoreFile string) ([]string, error) {
+	excludes := []string{}
+	ignore, err := os.ReadFile(ignoreFile)
+	if err != nil {
+		return excludes, err
+	}
+	for _, e := range strings.Split(string(ignore), "\n") {
+		if len(e) == 0 || e[0] == '#' {
+			continue
+		}
+		excludes = append(excludes, e)
+	}
+	return excludes, nil
 }
