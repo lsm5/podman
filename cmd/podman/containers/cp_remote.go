@@ -78,15 +78,19 @@ func copyFromContainerRemote(container string, containerPath string, hostPath st
 
 // copyToContainerRemote copies from hostPath to the containerPath on the container.
 func copyToContainerRemote(container string, containerPath string, hostPath string) error {
-	isStdin := hostPath == "-"
+	isStdin := hostPath == "-" || hostPath == "/dev/stdin" || hostPath == os.Stdin.Name()
 	if isStdin {
 		hostPath = os.Stdin.Name()
 	}
 
-	// Get info about the host path
-	hostInfo, err := os.Stat(hostPath)
-	if err != nil {
-		return fmt.Errorf("%q could not be found on the host: %w", hostPath, err)
+	// Get info about the host path (skip stat for stdin)
+	var hostInfo os.FileInfo
+	var err error
+	if !isStdin {
+		hostInfo, err = os.Stat(hostPath)
+		if err != nil {
+			return fmt.Errorf("%q could not be found on the host: %w", hostPath, err)
+		}
 	}
 
 	// Get info about the container destination path
@@ -114,9 +118,9 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 			}
 			containerExists = false
 
-			// If we're copying contents only (source ends with /.), use the dest path directly
-			// The server will create it as a directory
-			if strings.HasSuffix(hostPath, "/.") {
+			// When copying from stdin or copying contents only (source ends with /.),
+			// use the dest path directly - the server will create it as a directory
+			if isStdin || strings.HasSuffix(hostPath, "/.") {
 				targetPath = containerPath
 				containerResolvedToParentDir = false
 			} else {
@@ -140,8 +144,13 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 	}
 
 	// Validate: can't copy directory to a file
-	if hostInfo.IsDir() && containerExists && !containerIsDir {
+	if !isStdin && hostInfo.IsDir() && containerExists && !containerIsDir {
 		return errors.New("destination must be a directory when copying a directory")
+	}
+
+	// When copying from stdin, destination must be a directory
+	if isStdin && containerExists && !containerIsDir {
+		return errors.New("destination must be a directory when copying from stdin")
 	}
 
 	reader, writer := io.Pipe()
@@ -165,8 +174,8 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 	}
 
 	// If we're copying to a non-existent path or file-to-file, use Rename
-	// But NOT when copying contents only (hostPath ends with /.)
-	if ((!hostInfo.IsDir() && !containerIsDir) || containerResolvedToParentDir) && !strings.HasSuffix(hostPath, "/.") {
+	// But NOT when copying from stdin or when copying contents only (hostPath ends with /.)
+	if !isStdin && ((!hostInfo.IsDir() && !containerIsDir) || containerResolvedToParentDir) && !strings.HasSuffix(hostPath, "/.") {
 		copyOptions.Rename = map[string]string{filepath.Base(hostPath): containerBaseName}
 	}
 
