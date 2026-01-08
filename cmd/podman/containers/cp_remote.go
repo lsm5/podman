@@ -98,23 +98,33 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 	var containerBaseName string
 
 	if err != nil {
-		// Container path doesn't exist
-		// If path has trailing /, it must be a directory (error if it doesn't exist)
-		if strings.HasSuffix(containerPath, "/") {
-			return fmt.Errorf("%q could not be found on container %s: %w", containerPath, container, err)
-		}
-		containerExists = false
-
-		// If we're copying contents only (source ends with /.), use the dest path directly
-		// The server will create it as a directory
-		if strings.HasSuffix(hostPath, "/.") {
-			targetPath = containerPath
-			containerResolvedToParentDir = false
+		// Container path doesn't exist (or is a broken symlink)
+		// If containerInfo is not nil, it's a symlink even if target doesn't exist
+		if containerInfo != nil && containerInfo.LinkTarget != "" {
+			// Broken symlink - treat like a file and use the symlink target
+			containerExists = true
+			containerIsDir = false
+			targetPath = filepath.Dir(containerInfo.LinkTarget)
+			containerBaseName = filepath.Base(containerInfo.LinkTarget)
 		} else {
-			// Otherwise, use parent directory and rename
-			containerResolvedToParentDir = true
-			targetPath = filepath.Dir(containerPath)
-			containerBaseName = filepath.Base(containerPath)
+			// Path truly doesn't exist
+			// If path has trailing /, it must be a directory (error if it doesn't exist)
+			if strings.HasSuffix(containerPath, "/") {
+				return fmt.Errorf("%q could not be found on container %s: %w", containerPath, container, err)
+			}
+			containerExists = false
+
+			// If we're copying contents only (source ends with /.), use the dest path directly
+			// The server will create it as a directory
+			if strings.HasSuffix(hostPath, "/.") {
+				targetPath = containerPath
+				containerResolvedToParentDir = false
+			} else {
+				// Otherwise, use parent directory and rename
+				containerResolvedToParentDir = true
+				targetPath = filepath.Dir(containerPath)
+				containerBaseName = filepath.Base(containerPath)
+			}
 		}
 	} else {
 		containerExists = true
@@ -189,22 +199,32 @@ func copyBetweenContainersRemote(sourceContainer string, sourcePath string, dest
 	var destBaseName string
 
 	if err != nil {
-		// Destination path doesn't exist
-		// If path has trailing /, it must be a directory (error if it doesn't exist)
-		if strings.HasSuffix(destPath, "/") {
-			return fmt.Errorf("%q could not be found on container %s: %w", destPath, destContainer, err)
-		}
-		destExists = false
-
-		// If we're copying contents only (source ends with /.), use the dest path directly
-		if strings.HasSuffix(sourcePath, "/.") {
-			targetPath = destPath
-			destResolvedToParentDir = false
+		// Destination path doesn't exist (or is a broken symlink)
+		// If destInfo is not nil, it's a symlink even if target doesn't exist
+		if destInfo != nil && destInfo.LinkTarget != "" {
+			// Broken symlink - treat like a file and use the symlink target
+			destExists = true
+			destIsDir = false
+			targetPath = filepath.Dir(destInfo.LinkTarget)
+			destBaseName = filepath.Base(destInfo.LinkTarget)
 		} else {
-			// Otherwise, use parent directory and rename
-			destResolvedToParentDir = true
-			targetPath = filepath.Dir(destPath)
-			destBaseName = filepath.Base(destPath)
+			// Path truly doesn't exist
+			// If path has trailing /, it must be a directory (error if it doesn't exist)
+			if strings.HasSuffix(destPath, "/") {
+				return fmt.Errorf("%q could not be found on container %s: %w", destPath, destContainer, err)
+			}
+			destExists = false
+
+			// If we're copying contents only (source ends with /.), use the dest path directly
+			if strings.HasSuffix(sourcePath, "/.") {
+				targetPath = destPath
+				destResolvedToParentDir = false
+			} else {
+				// Otherwise, use parent directory and rename
+				destResolvedToParentDir = true
+				targetPath = filepath.Dir(destPath)
+				destBaseName = filepath.Base(destPath)
+			}
 		}
 	} else {
 		destExists = true
