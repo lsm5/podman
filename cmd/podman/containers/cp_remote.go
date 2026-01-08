@@ -14,6 +14,7 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/pkg/copy"
 	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/storage/pkg/archive"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +36,12 @@ func cp(cmd *cobra.Command, args []string) error {
 
 // copyFromContainerRemote copies from the containerPath on the container to hostPath.
 func copyFromContainerRemote(container string, containerPath string, hostPath string) error {
+	// Validate: /dev/stdout is not a valid destination
+	// Only "-" gets special treatment as stdout
+	if hostPath == "/dev/stdout" {
+		return fmt.Errorf("invalid destination: %q must be a directory or a regular file", hostPath)
+	}
+
 	isStdout := hostPath == "-"
 	if isStdout {
 		hostPath = os.Stdout.Name()
@@ -95,7 +102,7 @@ func copyFromContainerRemote(container string, containerPath string, hostPath st
 		}
 	}
 
-	if err := extractTar(reader, hostPath, containerInfo.IsDir, stripComponents); err != nil {
+	if err := extractTar(reader, hostPath, containerInfo.IsDir, stripComponents, cpOpts.OverwriteDirNonDir); err != nil {
 		return err
 	}
 
@@ -105,8 +112,31 @@ func copyFromContainerRemote(container string, containerPath string, hostPath st
 // copyToContainerRemote copies from hostPath to the containerPath on the container.
 func copyToContainerRemote(container string, containerPath string, hostPath string) error {
 	isStdin := hostPath == "-" || hostPath == "/dev/stdin" || hostPath == os.Stdin.Name()
+	var stdinFile string
 	if isStdin {
-		hostPath = os.Stdin.Name()
+		// Copy from stdin to a temporary file to validate it's a tar archive
+		// This provides proper client-side error reporting
+		tmpFile, err := os.CreateTemp("", "podman-cp-")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tmpFile.Name())
+
+		_, err = io.Copy(tmpFile, os.Stdin)
+		if err != nil {
+			tmpFile.Close()
+			return err
+		}
+		if err = tmpFile.Close(); err != nil {
+			return err
+		}
+
+		if !archive.IsArchivePath(tmpFile.Name()) {
+			return errors.New("source must be a (compressed) tar archive when copying from stdin")
+		}
+
+		stdinFile = tmpFile.Name()
+		hostPath = stdinFile
 	}
 
 	// Get info about the host path (skip stat for stdin)
@@ -187,7 +217,14 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 	go func() {
 		defer writer.Close()
 		if isStdin {
-			_, tarErr = io.Copy(writer, os.Stdin)
+			// Read from the temp file we created
+			f, err := os.Open(stdinFile)
+			if err != nil {
+				tarErr = err
+				return
+			}
+			defer f.Close()
+			_, tarErr = io.Copy(writer, f)
 		} else {
 			tarErr = createTar(hostPath, writer)
 		}
@@ -197,7 +234,8 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 	defer reader.Close()
 
 	copyOptions := entities.CopyOptions{
-		Chown: chown,
+		Chown:                chown,
+		NoOverwriteDirNonDir: !cpOpts.OverwriteDirNonDir,
 	}
 
 	// If we're copying to a non-existent path or file-to-file, use Rename
@@ -299,7 +337,8 @@ func copyBetweenContainersRemote(sourceContainer string, sourcePath string, dest
 	defer reader.Close()
 
 	copyOptions := entities.CopyOptions{
-		Chown: chown,
+		Chown:                chown,
+		NoOverwriteDirNonDir: !cpOpts.OverwriteDirNonDir,
 	}
 
 	// If we're copying to a non-existent path or file-to-file, use Rename
@@ -381,7 +420,7 @@ func createTar(sourcePath string, writer io.Writer) error {
 }
 
 // extractTar extracts a tar archive to the specified destination
-func extractTar(reader io.Reader, destPath string, isDir bool, stripComponents int) error {
+func extractTar(reader io.Reader, destPath string, isDir bool, stripComponents int, overwrite bool) error {
 	tr := tar.NewReader(reader)
 
 	// Check if destination exists
@@ -420,6 +459,21 @@ func extractTar(reader io.Reader, destPath string, isDir bool, stripComponents i
 		} else {
 			// Dest exists but isn't a directory, or we're extracting a directory
 			target = filepath.Join(destPath, name)
+		}
+
+		// Check if target exists and handle overwrite
+		if targetInfo, err := os.Lstat(target); err == nil {
+			targetIsDir := targetInfo.IsDir()
+			// If types don't match (file vs directory)
+			if (header.Typeflag == tar.TypeDir && !targetIsDir) || (header.Typeflag == tar.TypeReg && targetIsDir) {
+				if !overwrite {
+					return fmt.Errorf("error creating %q: file exists", filepath.Join("/", name))
+				}
+				// Remove the existing path to allow overwrite
+				if err := os.RemoveAll(target); err != nil {
+					return err
+				}
+			}
 		}
 
 		switch header.Typeflag {
