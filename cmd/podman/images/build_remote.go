@@ -76,6 +76,7 @@ type buildFlagsWrapper struct {
 	AllPlatforms  bool
 	Manifest      string
 	UnsetEnvs     []string
+	Ulimit        []string
 }
 
 var (
@@ -214,6 +215,7 @@ func buildFlags(cmd *cobra.Command) {
 	flags.BoolVar(&buildOpts.AllPlatforms, "all-platforms", false, "Build for all platforms")
 	flags.StringVar(&buildOpts.Manifest, "manifest", "", "Add to manifest list")
 	flags.StringArrayVar(&buildOpts.UnsetEnvs, "unsetenv", []string{}, "Unset environment variables")
+	flags.StringArrayVar(&buildOpts.Ulimit, "ulimit", []string{}, "Ulimit options")
 
 	// Hidden flags
 	_ = flags.MarkHidden("disable-content-trust")
@@ -323,7 +325,9 @@ func build(cmd *cobra.Command, args []string) error {
 
 	opts := entities.BuildOptions{
 		BuildOptions: buildahDefine.BuildOptions{
-			CommonBuildOpts: &buildahDefine.CommonBuildOptions{},
+			CommonBuildOpts: &buildahDefine.CommonBuildOptions{
+				Ulimit: buildOpts.Ulimit,
+			},
 			AdditionalTags:  tags,
 			Args:            buildArgs,
 			ContextDirectory: contextDir,
