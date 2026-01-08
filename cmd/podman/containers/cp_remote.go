@@ -205,9 +205,11 @@ func copyToContainerRemote(container string, containerPath string, hostPath stri
 		return errors.New("destination must be a directory when copying a directory")
 	}
 
-	// When copying from stdin, destination must be a directory
-	if isStdin && containerExists && !containerIsDir {
-		return errors.New("destination must be a directory when copying from stdin")
+	// When copying from stdin, destination must exist and be a directory
+	if isStdin {
+		if !containerExists || !containerIsDir {
+			return errors.New("destination must be a directory when copying from stdin")
+		}
 	}
 
 	reader, writer := io.Pipe()
