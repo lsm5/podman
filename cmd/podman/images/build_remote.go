@@ -260,6 +260,16 @@ func build(cmd *cobra.Command, args []string) error {
 		contextDir = "."
 	}
 
+	// Handle stdin: when context is "-", Dockerfile comes from stdin
+	if contextDir == "-" {
+		// Add /dev/stdin to containerFiles if not already present
+		if len(containerFiles) == 0 {
+			containerFiles = append(containerFiles, "/dev/stdin")
+		}
+		// Use current directory as context
+		contextDir = "."
+	}
+
 	// Build entities.BuildOptions from flags
 	output := ""
 	tags := buildOpts.Tag
