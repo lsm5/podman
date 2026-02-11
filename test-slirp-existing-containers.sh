@@ -153,8 +153,6 @@ else
     fail "Network connectivity lost after restart"
 fi
 
-podman stop existing-slirp-1
-
 # TEST 7: Container with port mappings
 print_test "7" "Existing container with port mappings"
 
@@ -181,13 +179,15 @@ podman rm existing-slirp-2
 # TEST 8: Inspect network settings
 print_test "8" "Inspect migrated container network settings"
 
-NETWORK_SETTINGS=$(podman inspect existing-slirp-1 --format '{{json .NetworkSettings}}' | jq -r '.SandboxKey')
+NETWORK_SETTINGS=$(podman inspect existing-slirp-1 --format '{{.NetworkSettings.SandboxKey}}')
 
-if [ -n "$NETWORK_SETTINGS" ] && [ "$NETWORK_SETTINGS" != "null" ]; then
+if [ -n "$NETWORK_SETTINGS" ] && [ "$NETWORK_SETTINGS" != "<no value>" ]; then
     pass "Network namespace configured: $NETWORK_SETTINGS"
 else
     fail "Network namespace not properly configured"
 fi
+
+podman stop existing-slirp-1
 
 # TEST 9: Pod with slirp4netns
 print_test "9" "Existing pod with slirp4netns network"
