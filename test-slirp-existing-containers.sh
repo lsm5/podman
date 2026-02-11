@@ -2,7 +2,8 @@
 # Test existing container migration: Containers created with slirp4netns before upgrade
 # This simulates containers that were created with older Podman versions using slirp4netns
 
-set -e
+# Note: Don't use 'set -e' in test scripts - we want to run all tests
+# even if some fail, and collect results at the end
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
