@@ -29,7 +29,6 @@ function pass() {
 function fail() {
     echo -e "${RED}✗ FAIL${NC} $1"
     ((FAILED++))
-    exit 1
 }
 
 function cleanup() {
