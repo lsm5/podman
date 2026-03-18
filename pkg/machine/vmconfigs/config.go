@@ -4,8 +4,8 @@ import (
 	"time"
 
 	gvproxy "github.com/containers/gvisor-tap-vsock/pkg/types"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/define"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
 	"go.podman.io/common/pkg/strongunits"
 	"go.podman.io/storage/pkg/lockfile"
 )
@@ -57,8 +57,8 @@ type MachineConfig struct {
 }
 
 type VMProvider interface { //nolint:interfacebloat
-	CreateVM(opts define.CreateVMOpts, mc *MachineConfig, builder *ignition.IgnitionBuilder) error
-	PrepareIgnition(mc *MachineConfig, ignBuilder *ignition.IgnitionBuilder) (*ignition.ReadyUnitOpts, error)
+	CreateVM(opts define.CreateVMOpts, mc *MachineConfig, builder *cloudinit.CloudInitBuilder) error
+	PrepareCloudInit(mc *MachineConfig, ciBuilder *cloudinit.CloudInitBuilder) (*cloudinit.ReadyUnitOpts, error)
 	Exists(name string) (bool, error)
 	MountType() VolumeMountType
 	MountVolumesToVM(mc *MachineConfig, quiet bool) error

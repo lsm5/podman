@@ -263,6 +263,29 @@ func (mc *MachineConfig) IgnitionFile() (*define.VMFile, error) {
 	return configDir.AppendToNewVMFile(mc.Name+".ign", nil)
 }
 
+// CloudInitDir returns the directory where cloud-init user-data and meta-data
+// files are stored for this machine.
+func (mc *MachineConfig) CloudInitDir() (string, error) {
+	configDir, err := mc.ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(configDir.GetPath(), mc.Name+"-cloudinit")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// CloudInitISO returns the path to the CIDATA ISO for this machine.
+func (mc *MachineConfig) CloudInitISO() (*define.VMFile, error) {
+	configDir, err := mc.ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	return configDir.AppendToNewVMFile(mc.Name+"-cidata.iso", nil)
+}
+
 func (mc *MachineConfig) ReadySocket() (*define.VMFile, error) {
 	rtDir, err := mc.RuntimeDir()
 	if err != nil {
