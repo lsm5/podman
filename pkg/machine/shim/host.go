@@ -19,7 +19,7 @@ import (
 	"github.com/containers/podman/v6/pkg/machine/connection"
 	machineDefine "github.com/containers/podman/v6/pkg/machine/define"
 	"github.com/containers/podman/v6/pkg/machine/env"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/lock"
 	"github.com/containers/podman/v6/pkg/machine/provider"
 	"github.com/containers/podman/v6/pkg/machine/proxyenv"
@@ -176,7 +176,7 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 
 	logrus.Debugf("imagePath is %q", imagePath.GetPath())
 
-	ignitionFile, err := mc.IgnitionFile()
+	cloudInitDir, err := mc.CloudInitDir()
 	if err != nil {
 		return err
 	}
@@ -196,27 +196,26 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 		}
 	}
 
-	ignBuilder := ignition.NewIgnitionBuilder(ignition.DynamicIgnition{
+	ciBuilder := cloudinit.NewCloudInitBuilder(cloudinit.DynamicCloudInit{
 		Name:      userName,
 		Key:       sshKey,
 		TimeZone:  opts.TimeZone,
 		UID:       uid,
 		VMName:    opts.Name,
 		VMType:    mp.VMType(),
-		WritePath: ignitionFile.GetPath(),
+		WritePath: cloudInitDir,
 		Rootful:   opts.Rootful,
 		Swap:      opts.Swap,
 	})
 
-	// If the user provides an ignition file, we need to
-	// copy it into the conf dir
+	// If the user provides a cloud-init directory, use it
 	if len(opts.IgnitionPath) > 0 {
-		err = ignBuilder.BuildWithIgnitionFile(opts.IgnitionPath)
+		err = ciBuilder.BuildWithCloudInitDir(opts.IgnitionPath)
 		if err != nil {
 			return err
 		}
 	} else {
-		err = ignBuilder.GenerateIgnitionConfig()
+		err = ciBuilder.GenerateCloudInitConfig()
 		if err != nil {
 			return err
 		}
@@ -235,7 +234,7 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 		playbookDest := fmt.Sprintf("/home/%s/%s", userName, "playbook.yaml")
 
 		if mp.VMType() != machineDefine.WSLVirt {
-			err = ignBuilder.AddPlaybook(string(s), playbookDest, userName)
+			err = ciBuilder.AddPlaybook(string(s), playbookDest, userName)
 			if err != nil {
 				return err
 			}
@@ -248,27 +247,28 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 		}
 	}
 
-	readyIgnOpts, err := mp.PrepareIgnition(mc, &ignBuilder)
+	readyOpts, err := mp.PrepareCloudInit(mc, &ciBuilder)
 	if err != nil {
 		return err
 	}
 
-	readyUnitFile, err := ignition.CreateReadyUnitFile(mp.VMType(), readyIgnOpts)
+	readyUnitFile, err := cloudinit.CreateReadyUnitFile(mp.VMType(), readyOpts)
 	if err != nil {
 		return err
 	}
 
-	readyUnit := ignition.Unit{
-		Enabled:  ignition.BoolToPtr(true),
+	enabled := true
+	readyUnit := cloudinit.SystemdUnit{
+		Enabled:  &enabled,
 		Name:     "ready.service",
-		Contents: ignition.StrToPtr(readyUnitFile),
+		Contents: &readyUnitFile,
 	}
-	ignBuilder.WithUnit(readyUnit)
+	ciBuilder.WithUnit(readyUnit)
 
 	// CreateVM could cause the init command to be re-launched in some cases (e.g. wsl)
 	// so we need to avoid creating the machine config or connections before this check happens.
 	// when relaunching, the invoked 'init' command will be responsible to set up the machine
-	err = mp.CreateVM(createOpts, mc, &ignBuilder)
+	err = mp.CreateVM(createOpts, mc, &ciBuilder)
 	if err != nil {
 		return err
 	}
@@ -288,7 +288,16 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 	callbackFuncs.Add(cleanup)
 
 	if len(opts.IgnitionPath) == 0 {
-		if err := ignBuilder.Build(); err != nil {
+		if err := ciBuilder.Build(); err != nil {
+			return err
+		}
+
+		// Create CIDATA ISO from the cloud-init files
+		cloudInitISO, err := mc.CloudInitISO()
+		if err != nil {
+			return err
+		}
+		if err := cloudinit.CreateCIDATAISO(cloudInitDir, cloudInitISO.GetPath()); err != nil {
 			return err
 		}
 	}
