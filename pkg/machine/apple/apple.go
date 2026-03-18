@@ -15,7 +15,7 @@ import (
 	gvproxy "github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/podman/v6/pkg/machine"
 	"github.com/containers/podman/v6/pkg/machine/define"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/sockets"
 	"github.com/containers/podman/v6/pkg/machine/vmconfigs"
 	"github.com/containers/podman/v6/pkg/systemd/parser"
@@ -65,12 +65,13 @@ func SetProviderAttrs(mc *vmconfigs.MachineConfig, opts define.SetOptions, state
 	return nil
 }
 
-func GenerateSystemDFilesForVirtiofsMounts(mounts []machine.VirtIoFs) ([]ignition.Unit, error) {
+func GenerateSystemDFilesForVirtiofsMounts(mounts []machine.VirtIoFs) ([]cloudinit.SystemdUnit, error) {
 	// mounting in fcos with virtiofs is a bit of a dance.  we need a unit file for the mount, a unit file
 	// for automatic mounting on boot, and a "preparatory" service file that disables FCOS security, performs
 	// the mkdir of the mount point, and then re-enables security.  This must be done for each mount.
 
-	unitFiles := make([]ignition.Unit, 0, len(mounts))
+	enabled := true
+	unitFiles := make([]cloudinit.SystemdUnit, 0, len(mounts))
 	for _, mnt := range mounts {
 		// Create mount unit for each mount
 		mountUnit := parser.NewUnitFile()
@@ -84,10 +85,11 @@ func GenerateSystemDFilesForVirtiofsMounts(mounts []machine.VirtIoFs) ([]ignitio
 			return nil, err
 		}
 
-		virtiofsMount := ignition.Unit{
-			Enabled:  ignition.BoolToPtr(true),
+		contents := fmt.Sprintf(mountUnitFile, mnt.Tag, mnt.Target)
+		virtiofsMount := cloudinit.SystemdUnit{
+			Enabled:  &enabled,
 			Name:     fmt.Sprintf("%s.mount", parser.PathEscape(mnt.Target)),
-			Contents: ignition.StrToPtr(fmt.Sprintf(mountUnitFile, mnt.Tag, mnt.Target)),
+			Contents: &contents,
 		}
 
 		unitFiles = append(unitFiles, virtiofsMount)
@@ -108,12 +110,11 @@ func GenerateSystemDFilesForVirtiofsMounts(mounts []machine.VirtIoFs) ([]ignitio
 		return nil, err
 	}
 
-	immutableRootOffUnit := ignition.Unit{
-		Contents: ignition.StrToPtr(immutableRootOffFile),
+	unitFiles = append(unitFiles, cloudinit.SystemdUnit{
+		Contents: &immutableRootOffFile,
 		Name:     "immutable-root-off.service",
-		Enabled:  ignition.BoolToPtr(true),
-	}
-	unitFiles = append(unitFiles, immutableRootOffUnit)
+		Enabled:  &enabled,
+	})
 
 	immutableRootOn := parser.NewUnitFile()
 	immutableRootOn.Add("Unit", "Description", "Set / back to immutable after mounts are done")
@@ -129,12 +130,11 @@ func GenerateSystemDFilesForVirtiofsMounts(mounts []machine.VirtIoFs) ([]ignitio
 		return nil, err
 	}
 
-	immutableRootOnUnit := ignition.Unit{
-		Contents: ignition.StrToPtr(immutableRootOnFile),
+	unitFiles = append(unitFiles, cloudinit.SystemdUnit{
+		Contents: &immutableRootOnFile,
 		Name:     "immutable-root-on.service",
-		Enabled:  ignition.BoolToPtr(true),
-	}
-	unitFiles = append(unitFiles, immutableRootOnUnit)
+		Enabled:  &enabled,
+	})
 
 	return unitFiles, nil
 }

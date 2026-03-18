@@ -18,7 +18,7 @@ import (
 	"github.com/containers/podman/v6/pkg/machine/define"
 	"github.com/containers/podman/v6/pkg/machine/env"
 	"github.com/containers/podman/v6/pkg/machine/hyperv/vsock"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/vmconfigs"
 	"github.com/containers/podman/v6/pkg/machine/windows"
 	"github.com/containers/podman/v6/pkg/systemd/parser"
@@ -42,7 +42,7 @@ func (h HyperVStubber) RequireExclusiveActive() bool {
 	return true
 }
 
-func (h HyperVStubber) CreateVM(_ define.CreateVMOpts, mc *vmconfigs.MachineConfig, builder *ignition.IgnitionBuilder) error {
+func (h HyperVStubber) CreateVM(_ define.CreateVMOpts, mc *vmconfigs.MachineConfig, builder *cloudinit.CloudInitBuilder) error {
 	var err error
 	callbackFuncs := machine.CleanUp()
 	defer callbackFuncs.CleanIfErr(&err)
@@ -118,23 +118,17 @@ func (h HyperVStubber) CreateVM(_ define.CreateVMOpts, mc *vmconfigs.MachineConf
 		return err
 	}
 
-	builder.WithUnit(ignition.Unit{
-		Contents: ignition.StrToPtr(netUnitFile),
-		Enabled:  ignition.BoolToPtr(true),
+	enabled := true
+	builder.WithUnit(cloudinit.SystemdUnit{
+		Contents: &netUnitFile,
+		Enabled:  &enabled,
 		Name:     "vsock-network.service",
 	})
 
-	builder.WithFile(ignition.File{
-		Node: ignition.Node{
-			Path: "/etc/NetworkManager/system-connections/vsock0.nmconnection",
-		},
-		FileEmbedded1: ignition.FileEmbedded1{
-			Append: nil,
-			Contents: ignition.Resource{
-				Source: ignition.EncodeDataURLPtr(hyperVVsockNMConnection),
-			},
-			Mode: ignition.IntToPtr(0o600),
-		},
+	builder.WithFile(cloudinit.WriteFile{
+		Path:        "/etc/NetworkManager/system-connections/vsock0.nmconnection",
+		Content:     hyperVVsockNMConnection,
+		Permissions: "0600",
 	})
 
 	vmm := hypervctl.NewVirtualMachineManager()
@@ -535,11 +529,11 @@ func (h HyperVStubber) SetProviderAttrs(mc *vmconfigs.MachineConfig, opts define
 	return nil
 }
 
-func (h HyperVStubber) PrepareIgnition(mc *vmconfigs.MachineConfig, _ *ignition.IgnitionBuilder) (*ignition.ReadyUnitOpts, error) {
-	// HyperV is different because it has to know some ignition details before creating the VM.  It cannot
-	// simply be derived. So we create the HyperVConfig here.
+func (h HyperVStubber) PrepareCloudInit(mc *vmconfigs.MachineConfig, _ *cloudinit.CloudInitBuilder) (*cloudinit.ReadyUnitOpts, error) {
+	// HyperV is different because it has to know some provisioning details before creating the VM.
+	// It cannot simply be derived. So we create the HyperVConfig here.
 	mc.HyperVHypervisor = new(vmconfigs.HyperVConfig)
-	var ignOpts ignition.ReadyUnitOpts
+	var readyOpts cloudinit.ReadyUnitOpts
 
 	// Attempt to load an existing HVSock registry entry for events.
 	// If no existing entry is found, create a new one.
@@ -558,8 +552,8 @@ func (h HyperVStubber) PrepareIgnition(mc *vmconfigs.MachineConfig, _ *ignition.
 	// TODO Stopped here ... fails bc mc.Hypervisor is nil ... this can be nil checked prior and created
 	// however the same will have to be done in create
 	mc.HyperVHypervisor.ReadyVsock = *readySock
-	ignOpts.Port = readySock.Port
-	return &ignOpts, nil
+	readyOpts.Port = readySock.Port
+	return &readyOpts, nil
 }
 
 func (h HyperVStubber) PostStartNetworking(mc *vmconfigs.MachineConfig, _ bool) error {

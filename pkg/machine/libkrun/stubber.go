@@ -11,7 +11,7 @@ import (
 	"github.com/containers/podman/v6/pkg/machine/apple"
 	"github.com/containers/podman/v6/pkg/machine/apple/vfkit"
 	"github.com/containers/podman/v6/pkg/machine/define"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/vmconfigs"
 	"github.com/containers/podman/v6/utils"
 	vfConfig "github.com/crc-org/vfkit/pkg/config"
@@ -26,7 +26,7 @@ type LibKrunStubber struct {
 	vmconfigs.AppleHVConfig
 }
 
-func (l *LibKrunStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, builder *ignition.IgnitionBuilder) error {
+func (l *LibKrunStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, builder *cloudinit.CloudInitBuilder) error {
 	mc.LibKrunHypervisor = new(vmconfigs.LibKrunConfig)
 	mc.LibKrunHypervisor.KRun = vfkit.Helper{}
 
@@ -54,7 +54,7 @@ func (l *LibKrunStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.Machin
 	return apple.ResizeDisk(mc, mc.Resources.DiskSize)
 }
 
-func (l *LibKrunStubber) PrepareIgnition(_ *vmconfigs.MachineConfig, _ *ignition.IgnitionBuilder) (*ignition.ReadyUnitOpts, error) {
+func (l *LibKrunStubber) PrepareCloudInit(_ *vmconfigs.MachineConfig, _ *cloudinit.CloudInitBuilder) (*cloudinit.ReadyUnitOpts, error) {
 	return nil, nil
 }
 

@@ -16,7 +16,7 @@ import (
 	gvproxy "github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/podman/v6/pkg/machine"
 	"github.com/containers/podman/v6/pkg/machine/define"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/qemu/command"
 	"github.com/containers/podman/v6/pkg/machine/sockets"
 	"github.com/containers/podman/v6/pkg/machine/vmconfigs"
@@ -57,7 +57,7 @@ func (q *QEMUStubber) setQEMUCommandLine(mc *vmconfigs.MachineConfig) error {
 		return err
 	}
 
-	ignitionFile, err := mc.IgnitionFile()
+	cloudInitISO, err := mc.CloudInitISO()
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (q *QEMUStubber) setQEMUCommandLine(mc *vmconfigs.MachineConfig) error {
 	q.Command.SetBootableImage(mc.ImagePath.GetPath())
 	q.Command.SetMemory(mc.Resources.Memory)
 	q.Command.SetCPUs(mc.Resources.CPUs)
-	q.Command.SetIgnitionFile(*ignitionFile)
+	q.Command.SetCloudInitISO(*cloudInitISO)
 	q.Command.SetQmpMonitor(mc.QEMUHypervisor.QMPMonitor)
 	gvProxySock, err := mc.GVProxySocket()
 	if err != nil {
@@ -89,7 +89,7 @@ func (q *QEMUStubber) setQEMUCommandLine(mc *vmconfigs.MachineConfig) error {
 	return nil
 }
 
-func (q *QEMUStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, _ *ignition.IgnitionBuilder) error {
+func (q *QEMUStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, _ *cloudinit.CloudInitBuilder) error {
 	monitor, err := command.NewQMPMonitor(opts.Name, opts.Dirs.RuntimeDir)
 	if err != nil {
 		return err
@@ -251,7 +251,7 @@ func (q *QEMUStubber) VMType() define.VMType {
 	return define.QemuVirt
 }
 
-func (q *QEMUStubber) PrepareIgnition(_ *vmconfigs.MachineConfig, _ *ignition.IgnitionBuilder) (*ignition.ReadyUnitOpts, error) {
+func (q *QEMUStubber) PrepareCloudInit(_ *vmconfigs.MachineConfig, _ *cloudinit.CloudInitBuilder) (*cloudinit.ReadyUnitOpts, error) {
 	return nil, nil
 }
 

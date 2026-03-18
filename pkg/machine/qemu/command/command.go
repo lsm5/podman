@@ -38,9 +38,9 @@ func (q *QemuCmd) SetCPUs(c uint64) {
 	*q = append(*q, "-smp", strconv.FormatUint(c, 10))
 }
 
-// SetIgnitionFile specifies the machine's ignition file
-func (q *QemuCmd) SetIgnitionFile(file define.VMFile) {
-	*q = append(*q, "-fw_cfg", "name=opt/com.coreos/config,file="+file.GetPath())
+// SetCloudInitISO attaches a NoCloud CIDATA ISO as a CD-ROM drive for cloud-init provisioning.
+func (q *QemuCmd) SetCloudInitISO(file define.VMFile) {
+	*q = append(*q, "-drive", "file="+file.GetPath()+",format=raw,if=virtio,media=cdrom,readonly=on")
 }
 
 // SetQmpMonitor specifies the machine's qmp socket

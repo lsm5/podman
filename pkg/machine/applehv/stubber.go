@@ -12,7 +12,7 @@ import (
 	"github.com/containers/podman/v6/pkg/machine/apple"
 	"github.com/containers/podman/v6/pkg/machine/apple/vfkit"
 	"github.com/containers/podman/v6/pkg/machine/define"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/vmconfigs"
 	"github.com/containers/podman/v6/utils"
 	vfConfig "github.com/crc-org/vfkit/pkg/config"
@@ -40,7 +40,7 @@ func (a *AppleHVStubber) RequireExclusiveActive() bool {
 	return true
 }
 
-func (a *AppleHVStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, ignBuilder *ignition.IgnitionBuilder) error {
+func (a *AppleHVStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, ciBuilder *cloudinit.CloudInitBuilder) error {
 	mc.AppleHypervisor = new(vmconfigs.AppleHVConfig)
 	mc.AppleHypervisor.Vfkit = vfkit.Helper{}
 	bl := vfConfig.NewEFIBootloader(fmt.Sprintf("%s/efi-bl-%s", opts.Dirs.DataDir.GetPath(), opts.Name), true)
@@ -57,12 +57,12 @@ func (a *AppleHVStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.Machin
 		virtiofsMounts = append(virtiofsMounts, machine.MountToVirtIOFs(mnt))
 	}
 
-	// Populate the ignition file with virtiofs stuff
-	virtIOIgnitionMounts, err := apple.GenerateSystemDFilesForVirtiofsMounts(virtiofsMounts)
+	// Populate cloud-init with virtiofs mount units
+	virtIOUnits, err := apple.GenerateSystemDFilesForVirtiofsMounts(virtiofsMounts)
 	if err != nil {
 		return err
 	}
-	ignBuilder.WithUnit(virtIOIgnitionMounts...)
+	ciBuilder.WithUnit(virtIOUnits...)
 
 	cfg, err := config.Default()
 	if err != nil {
@@ -141,7 +141,7 @@ func (a *AppleHVStubber) VMType() define.VMType {
 	return define.AppleHvVirt
 }
 
-func (a *AppleHVStubber) PrepareIgnition(_ *vmconfigs.MachineConfig, _ *ignition.IgnitionBuilder) (*ignition.ReadyUnitOpts, error) {
+func (a *AppleHVStubber) PrepareCloudInit(_ *vmconfigs.MachineConfig, _ *cloudinit.CloudInitBuilder) (*cloudinit.ReadyUnitOpts, error) {
 	return nil, nil
 }
 

@@ -15,7 +15,7 @@ import (
 	gvproxy "github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/podman/v6/pkg/machine"
 	"github.com/containers/podman/v6/pkg/machine/define"
-	"github.com/containers/podman/v6/pkg/machine/ignition"
+	"github.com/containers/podman/v6/pkg/machine/cloudinit"
 	"github.com/containers/podman/v6/pkg/machine/vmconfigs"
 	"github.com/containers/podman/v6/pkg/machine/windows"
 	"github.com/sirupsen/logrus"
@@ -25,7 +25,7 @@ type WSLStubber struct {
 	vmconfigs.WSLConfig
 }
 
-func (w WSLStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, _ *ignition.IgnitionBuilder) error {
+func (w WSLStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConfig, _ *cloudinit.CloudInitBuilder) error {
 	var err error
 	// cleanup half-baked files if init fails at any point
 	callbackFuncs := machine.CleanUp()
@@ -86,7 +86,7 @@ func (w WSLStubber) CreateVM(opts define.CreateVMOpts, mc *vmconfigs.MachineConf
 	return terminateDist(dist)
 }
 
-func (w WSLStubber) PrepareIgnition(_ *vmconfigs.MachineConfig, _ *ignition.IgnitionBuilder) (*ignition.ReadyUnitOpts, error) {
+func (w WSLStubber) PrepareCloudInit(_ *vmconfigs.MachineConfig, _ *cloudinit.CloudInitBuilder) (*cloudinit.ReadyUnitOpts, error) {
 	return nil, nil
 }
 

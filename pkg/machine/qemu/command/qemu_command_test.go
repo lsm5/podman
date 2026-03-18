@@ -12,7 +12,7 @@ import (
 )
 
 func TestQemuCmd(t *testing.T) {
-	ignFile, err := define.NewMachineFile(t.TempDir()+"demo-ignition-file.ign", nil)
+	ciISOFile, err := define.NewMachineFile(t.TempDir()+"demo-cidata.iso", nil)
 	assert.NoError(t, err)
 
 	machineAddrFile, err := define.NewMachineFile(t.TempDir()+"tmp.sock", nil)
@@ -32,7 +32,7 @@ func TestQemuCmd(t *testing.T) {
 		Network: "unix",
 		Timeout: 3,
 	}
-	ignPath := ignFile.GetPath()
+	ciISOPath := ciISOFile.GetPath()
 	addrFilePath := machineAddrFile.GetPath()
 	readySocketPath := readySocket.GetPath()
 	vlanSocketPath := vlanSocket.GetPath()
@@ -42,7 +42,7 @@ func TestQemuCmd(t *testing.T) {
 	cmd := NewQemuBuilder("/usr/bin/qemu-system-x86_64", []string{})
 	cmd.SetMemory(2048)
 	cmd.SetCPUs(4)
-	cmd.SetIgnitionFile(*ignFile)
+	cmd.SetCloudInitISO(*ciISOFile)
 	cmd.SetQmpMonitor(monitor)
 	err = cmd.SetNetwork(vlanSocket)
 	assert.NoError(t, err)
@@ -56,7 +56,7 @@ func TestQemuCmd(t *testing.T) {
 		"memory-backend-memfd,id=mem,size=2048M,share=on",
 		"-m", "2048",
 		"-smp", "4",
-		"-fw_cfg", fmt.Sprintf("name=opt/com.coreos/config,file=%s", ignPath),
+		"-drive", fmt.Sprintf("file=%s,format=raw,if=virtio,media=cdrom,readonly=on", ciISOPath),
 		"-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", addrFilePath),
 		"-netdev", socketVlanNetdev(vlanSocketPath),
 		"-device", "virtio-net-pci,netdev=vlan,mac=5a:94:ef:e4:0c:ee",
