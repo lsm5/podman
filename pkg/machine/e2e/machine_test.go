@@ -63,14 +63,21 @@ var _ = BeforeSuite(func() {
 		Fail("unable to create testProvider")
 	}
 
-	testDiskProvider := testProvider.VMType()
-	if testDiskProvider == define.LibKrun {
-		testDiskProvider = define.AppleHvVirt // libkrun uses the applehv image for testing
-	}
-	pullError = pullOCITestDisk(tmpDir, testDiskProvider)
+	if localDisk, ok := os.LookupEnv("MACHINE_TEST_DISK"); ok {
+		// Use a local disk image instead of pulling from OCI registry
+		fqImageName = localDisk
+		suiteImageName = filepath.Base(fqImageName)
+		fmt.Printf("Using local disk image: %s\n", fqImageName)
+	} else {
+		testDiskProvider := testProvider.VMType()
+		if testDiskProvider == define.LibKrun {
+			testDiskProvider = define.AppleHvVirt // libkrun uses the applehv image for testing
+		}
+		pullError = pullOCITestDisk(tmpDir, testDiskProvider)
 
-	if pullError != nil {
-		Fail(fmt.Sprintf("failed to pull disk: %q", pullError))
+		if pullError != nil {
+			Fail(fmt.Sprintf("failed to pull disk: %q", pullError))
+		}
 	}
 
 	fmt.Println("Running platform specific set-up")
