@@ -133,10 +133,11 @@ func (ci *DynamicCloudInit) GenerateCloudInitConfig() error {
 		}
 	}
 
-	// Handle users that should not exist
+	// Handle users that should not exist — must run in bootcmd (before
+	// cloud-init's users module) so the UID is freed for the new user.
 	for _, u := range ci.Cfg.Users {
 		if u.ShouldExist != nil && !*u.ShouldExist {
-			ci.Cfg.RunCmd = append(ci.Cfg.RunCmd,
+			ci.Cfg.BootCmd = append(ci.Cfg.BootCmd,
 				fmt.Sprintf("userdel -r %s || true", u.Name))
 		}
 	}
@@ -162,12 +163,13 @@ func (ci *DynamicCloudInit) GenerateCloudInitConfig() error {
 func getWriteFiles(usrName string, uid int, rootful bool, vmtype define.VMType, swap uint64) []WriteFile {
 	var files []WriteFile
 
-	// Containers config
+	// Containers config — written as root because the user may not exist
+	// yet when write_files runs. Ownership is fixed by chown in runcmd.
 	containers := "[containers]\nnetns=\"bridge\"\npids_limit=0\n"
 	files = append(files, WriteFile{
 		Path:        "/home/" + usrName + "/.config/containers/containers.conf",
 		Content:     containers,
-		Owner:       fmt.Sprintf("%s:%s", usrName, usrName),
+		Owner:       "root:root",
 		Permissions: "0744",
 	})
 
@@ -275,6 +277,10 @@ func getRunCmds(usrName string, _ define.VMType, _ uint64) []string {
 		// Create symlinks
 		"ln -sf /usr/lib/systemd/user/podman.socket /etc/systemd/user/sockets.target.wants/podman.socket",
 		"ln -sf /usr/bin/podman /usr/local/bin/docker",
+
+		// Apply tmpfiles.d config for docker.sock symlink (cloud-init
+		// writes the config after systemd-tmpfiles has already run at boot)
+		fmt.Sprintf("systemd-tmpfiles --create %s", PodmanDockerTmpConfPath),
 	}
 
 	return cmds
@@ -415,7 +421,7 @@ func (b *CloudInitBuilder) BuildWithCloudInitDir(srcDir string) error {
 // Build finalizes the cloud-config by converting accumulated units into
 // write_files + runcmd entries, then writes user-data and meta-data.
 func (b *CloudInitBuilder) Build() error {
-	// Convert systemd units into write_files and runcmd entries
+	// Convert systemd units into write_files entries
 	for _, unit := range b.units {
 		if unit.Contents != nil {
 			b.dynamicCloudInit.Cfg.WriteFiles = append(b.dynamicCloudInit.Cfg.WriteFiles, WriteFile{
@@ -424,24 +430,28 @@ func (b *CloudInitBuilder) Build() error {
 				Permissions: "0644",
 			})
 		}
-		if unit.Enabled != nil {
-			if *unit.Enabled {
-				b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
-					fmt.Sprintf("systemctl enable %s", unit.Name))
-			} else {
-				b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
-					fmt.Sprintf("systemctl disable %s", unit.Name))
-			}
-		}
-		if unit.Mask != nil && *unit.Mask {
-			b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
-				fmt.Sprintf("systemctl mask %s", unit.Name))
-		}
 	}
 
-	// Reload systemd after writing unit files
 	if len(b.units) > 0 {
+		// Reload systemd first so it picks up newly written unit files
 		b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd, "systemctl daemon-reload")
+
+		// Then enable/disable/mask and start units
+		for _, unit := range b.units {
+			if unit.Mask != nil && *unit.Mask {
+				b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
+					fmt.Sprintf("systemctl mask %s", unit.Name))
+			}
+			if unit.Enabled != nil {
+				if *unit.Enabled {
+					b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
+						fmt.Sprintf("systemctl enable --now %s", unit.Name))
+				} else {
+					b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
+						fmt.Sprintf("systemctl disable %s", unit.Name))
+				}
+			}
+		}
 	}
 
 	logrus.Debugf("writing cloud-init files to %q", b.dynamicCloudInit.WritePath)

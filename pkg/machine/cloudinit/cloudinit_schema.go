@@ -5,6 +5,7 @@ package cloudinit
 // CloudConfig represents a cloud-init cloud-config YAML document.
 // See: https://cloudinit.readthedocs.io/en/latest/reference/modules.html
 type CloudConfig struct {
+	BootCmd    []string    `yaml:"bootcmd,omitempty"`
 	Users      []User      `yaml:"users,omitempty"`
 	WriteFiles []WriteFile `yaml:"write_files,omitempty"`
 	RunCmd     []string    `yaml:"runcmd,omitempty"`
