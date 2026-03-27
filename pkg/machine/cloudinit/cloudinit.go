@@ -268,10 +268,11 @@ func getRunCmds(usrName string, _ define.VMType, _ uint64) []string {
 		fmt.Sprintf("mkdir -p /home/%s/.config/systemd/user", usrName),
 		fmt.Sprintf("chown -R %s:%s /home/%s/.config", usrName, usrName, usrName),
 
-		// Enable podman socket
-		"systemctl enable podman.socket",
+		// Enable podman socket — failure here is fatal since podman
+		// requires this socket to communicate with the VM
+		"systemctl enable podman.socket || exit 1",
 
-		// Disable zincati (FCOS auto-updater)
+		// Disable zincati (FCOS auto-updater) — optional, may not exist
 		"systemctl disable zincati.service || true",
 
 		// Create symlinks
@@ -280,7 +281,8 @@ func getRunCmds(usrName string, _ define.VMType, _ uint64) []string {
 
 		// Apply tmpfiles.d config for docker.sock symlink (cloud-init
 		// writes the config after systemd-tmpfiles has already run at boot)
-		fmt.Sprintf("systemd-tmpfiles --create %s", PodmanDockerTmpConfPath),
+		// Failure is fatal since docker compat depends on this
+		fmt.Sprintf("systemd-tmpfiles --create %s || exit 1", PodmanDockerTmpConfPath),
 	}
 
 	return cmds
@@ -434,21 +436,21 @@ func (b *CloudInitBuilder) Build() error {
 
 	if len(b.units) > 0 {
 		// Reload systemd first so it picks up newly written unit files
-		b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd, "systemctl daemon-reload")
+		b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd, "systemctl daemon-reload || exit 1")
 
 		// Then enable/disable/mask and start units
 		for _, unit := range b.units {
 			if unit.Mask != nil && *unit.Mask {
 				b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
-					fmt.Sprintf("systemctl mask %s", unit.Name))
+					fmt.Sprintf("systemctl mask %s || exit 1", unit.Name))
 			}
 			if unit.Enabled != nil {
 				if *unit.Enabled {
 					b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
-						fmt.Sprintf("systemctl enable --now %s", unit.Name))
+						fmt.Sprintf("systemctl enable --now %s || exit 1", unit.Name))
 				} else {
 					b.dynamicCloudInit.Cfg.RunCmd = append(b.dynamicCloudInit.Cfg.RunCmd,
-						fmt.Sprintf("systemctl disable %s", unit.Name))
+						fmt.Sprintf("systemctl disable %s || true", unit.Name))
 				}
 			}
 		}
