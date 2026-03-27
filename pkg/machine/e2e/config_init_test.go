@@ -16,7 +16,7 @@ type initMachine struct {
 	cpus               *uint
 	diskSize           *uint
 	swap               *uint
-	ignitionPath       string
+	cloudInitDir       string
 	username           string
 	image              string
 	memory             *uint
@@ -41,8 +41,8 @@ func (i *initMachine) buildCmd(m *machineTestBuilder) []string {
 		diskSize = *i.diskSize
 	}
 	cmd = append(cmd, "--disk-size", strconv.Itoa(int(diskSize)))
-	if l := len(i.ignitionPath); l > 0 {
-		cmd = append(cmd, "--ignition-path", i.ignitionPath)
+	if l := len(i.cloudInitDir); l > 0 {
+		cmd = append(cmd, "--cloudinit-dir", i.cloudInitDir)
 	}
 	if l := len(i.username); l > 0 {
 		cmd = append(cmd, "--username", i.username)
@@ -99,7 +99,7 @@ func (i *initMachine) buildCmd(m *machineTestBuilder) []string {
 				return
 			}
 
-			// FIXME:#24344 work-around for custom ignition removal
+			// FIXME:#24344 work-around for custom cloud-init removal
 			if strings.Contains(session.errorToString(), "failed to remove machines files: unable to find connection named") {
 				return
 			}
@@ -126,8 +126,8 @@ func (i *initMachine) withSwap(size uint) *initMachine {
 	return i
 }
 
-func (i *initMachine) withIgnitionPath(path string) *initMachine {
-	i.ignitionPath = path
+func (i *initMachine) withCloudInitDir(path string) *initMachine {
+	i.cloudInitDir = path
 	return i
 }
 

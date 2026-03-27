@@ -96,7 +96,7 @@ var _ = Describe("podman machine rm", func() {
 		Expect(ec).To(Equal(125))
 	})
 
-	It("machine rm --save-ignition --save-image", func() {
+	It("machine rm --save-cloudinit --save-image", func() {
 		i := new(initMachine)
 		session, err := mb.setCmd(i.withFakeImage(mb)).run()
 		Expect(err).ToNot(HaveOccurred())
@@ -110,7 +110,7 @@ var _ = Describe("podman machine rm", func() {
 		pubkey := key + ".pub"
 
 		rm := rmMachine{}
-		removeSession, err := mb.setCmd(rm.withForce().withSaveIgnition().withSaveImage()).run()
+		removeSession, err := mb.setCmd(rm.withForce().withSaveCloudInit().withSaveImage()).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(removeSession).To(Exit(0))
 
@@ -125,10 +125,10 @@ var _ = Describe("podman machine rm", func() {
 		_, err = os.Stat(pubkey)
 		Expect(err).ToNot(HaveOccurred())
 
-		// WSL does not use ignition
+		// WSL does not use cloud-init
 		if testProvider.VMType() != define.WSLVirt {
-			ignPath := filepath.Join(testDir, ".config", "containers", "podman", "machine", testProvider.VMType().String(), mb.name+".ign")
-			_, err = os.Stat(ignPath)
+			isoPath := filepath.Join(testDir, ".config", "containers", "podman", "machine", testProvider.VMType().String(), mb.name+"-cidata.iso")
+			_, err = os.Stat(isoPath)
 			Expect(err).ToNot(HaveOccurred())
 		}
 		_, err = os.Stat(mb.imagePath)

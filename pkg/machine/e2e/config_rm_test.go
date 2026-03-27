@@ -3,12 +3,12 @@ package e2e_test
 type rmMachine struct {
 	/*
 	  -f, --force           Stop and do not prompt before rming
-	      --save-ignition   Do not delete ignition file
+	      --save-cloudinit   Do not delete cloud-init files
 	      --save-image      Do not delete the image file
 
 	*/
 	force        bool
-	saveIgnition bool
+	saveCloudInit bool
 	saveImage    bool
 
 	cmd []string
@@ -19,8 +19,8 @@ func (i *rmMachine) buildCmd(m *machineTestBuilder) []string {
 	if i.force {
 		cmd = append(cmd, "--force")
 	}
-	if i.saveIgnition {
-		cmd = append(cmd, "--save-ignition")
+	if i.saveCloudInit {
+		cmd = append(cmd, "--save-cloudinit")
 	}
 	if i.saveImage {
 		cmd = append(cmd, "--save-image")
@@ -35,8 +35,8 @@ func (i *rmMachine) withForce() *rmMachine {
 	return i
 }
 
-func (i *rmMachine) withSaveIgnition() *rmMachine {
-	i.saveIgnition = true
+func (i *rmMachine) withSaveCloudInit() *rmMachine {
+	i.saveCloudInit = true
 	return i
 }
 

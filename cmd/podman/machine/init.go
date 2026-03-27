@@ -149,9 +149,9 @@ func init() {
 		logrus.Error("unable to mark volume-driver flag deprecated")
 	}
 
-	IgnitionPathFlagName := "ignition-path"
-	flags.StringVar(&initOpts.IgnitionPath, IgnitionPathFlagName, "", "Path to ignition file")
-	_ = initCmd.RegisterFlagCompletionFunc(IgnitionPathFlagName, completion.AutocompleteDefault)
+	CloudInitDirFlagName := "cloudinit-dir"
+	flags.StringVar(&initOpts.CloudInitDir, CloudInitDirFlagName, "", "Path to cloud-init directory containing user-data and optional meta-data")
+	_ = initCmd.RegisterFlagCompletionFunc(CloudInitDirFlagName, completion.AutocompleteDefault)
 
 	rootfulFlagName := "rootful"
 	flags.BoolVar(&initOpts.Rootful, rootfulFlagName, false, "Whether this machine should prefer rootful container execution")

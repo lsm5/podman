@@ -10,7 +10,7 @@ type InitOptions struct {
 	PlaybookPath       string
 	CPUS               uint64
 	DiskSize           uint64
-	IgnitionPath       string
+	CloudInitDir       string
 	Image              string
 	Volumes            []string
 	IsDefault          bool

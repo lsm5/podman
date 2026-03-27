@@ -144,8 +144,13 @@ func (mc *MachineConfig) SetRootful(rootful bool) error {
 	return nil
 }
 
-func (mc *MachineConfig) Remove(machines map[string]bool, saveIgnition, saveImage bool) ([]string, func() error, error) {
-	ignitionFile, err := mc.IgnitionFile()
+func (mc *MachineConfig) Remove(machines map[string]bool, saveCloudInit, saveImage bool) ([]string, func() error, error) {
+	cloudInitISO, err := mc.CloudInitISO()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cloudInitDir, err := mc.CloudInitDir()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -180,8 +185,8 @@ func (mc *MachineConfig) Remove(machines map[string]bool, saveIgnition, saveImag
 	if !saveImage {
 		mc.ImagePath.GetPath()
 	}
-	if !saveIgnition {
-		ignitionFile.GetPath()
+	if !saveCloudInit {
+		rmFiles = append(rmFiles, cloudInitISO.GetPath(), cloudInitDir)
 	}
 
 	mcRemove := func() error {
@@ -190,8 +195,11 @@ func (mc *MachineConfig) Remove(machines map[string]bool, saveIgnition, saveImag
 			errs = append(errs, err)
 		}
 
-		if !saveIgnition {
-			if err := ignitionFile.Delete(); err != nil {
+		if !saveCloudInit {
+			if err := cloudInitISO.Delete(); err != nil {
+				errs = append(errs, err)
+			}
+			if err := os.RemoveAll(cloudInitDir); err != nil {
 				errs = append(errs, err)
 			}
 		}

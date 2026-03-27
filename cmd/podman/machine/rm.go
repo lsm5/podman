@@ -33,8 +33,8 @@ func init() {
 	formatFlagName := "force"
 	flags.BoolVarP(&destroyOptions.Force, formatFlagName, "f", false, "Stop and do not prompt before rming")
 
-	ignitionFlagName := "save-ignition"
-	flags.BoolVar(&destroyOptions.SaveIgnition, ignitionFlagName, false, "Do not delete ignition file")
+	cloudInitFlagName := "save-cloudinit"
+	flags.BoolVar(&destroyOptions.SaveCloudInit, cloudInitFlagName, false, "Do not delete cloud-init files")
 
 	imageFlagName := "save-image"
 	flags.BoolVar(&destroyOptions.SaveImage, imageFlagName, false, "Do not delete the image file")

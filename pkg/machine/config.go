@@ -76,7 +76,7 @@ type StopOptions struct{}
 type RemoveOptions struct {
 	Force        bool
 	SaveImage    bool
-	SaveIgnition bool
+	SaveCloudInit bool
 }
 
 type ResetOptions struct {

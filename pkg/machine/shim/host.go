@@ -209,8 +209,8 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 	})
 
 	// If the user provides a cloud-init directory, use it
-	if len(opts.IgnitionPath) > 0 {
-		err = ciBuilder.BuildWithCloudInitDir(opts.IgnitionPath)
+	if len(opts.CloudInitDir) > 0 {
+		err = ciBuilder.BuildWithCloudInitDir(opts.CloudInitDir)
 		if err != nil {
 			return err
 		}
@@ -287,7 +287,7 @@ func Init(opts machineDefine.InitOptions, mp vmconfigs.VMProvider) error {
 	}
 	callbackFuncs.Add(cleanup)
 
-	if len(opts.IgnitionPath) == 0 {
+	if len(opts.CloudInitDir) == 0 {
 		if err := ciBuilder.Build(); err != nil {
 			return err
 		}
@@ -763,7 +763,7 @@ func Remove(mc *vmconfigs.MachineConfig, mp vmconfigs.VMProvider, opts machine.R
 		return err
 	}
 
-	rmFiles, genericRm, err := mc.Remove(machines, opts.SaveIgnition, opts.SaveImage)
+	rmFiles, genericRm, err := mc.Remove(machines, opts.SaveCloudInit, opts.SaveImage)
 	if err != nil {
 		return err
 	}

@@ -383,34 +383,28 @@ var _ = Describe("podman machine init", func() {
 		Expect(sshSession.outputToString()).To(ContainSubstring("example"))
 	})
 
-	It("machine init with ignition path", func() {
-		skipIfWSL("Ignition is not compatible with WSL machines since they are not based on Fedora CoreOS")
+	It("machine init with cloudinit dir", func() {
+		skipIfWSL("Cloud-init is not compatible with WSL machines")
 
-		tmpDir, err := os.MkdirTemp("", "")
+		tmpDir, err := os.MkdirTemp("", "cloudinit-test-")
 		defer func() { _ = utils.GuardedRemoveAll(tmpDir) }()
 		Expect(err).ToNot(HaveOccurred())
 
-		tmpFile, err := os.CreateTemp(tmpDir, "test-ignition-*.ign")
-		Expect(err).ToNot(HaveOccurred())
+		mockUserData := "#cloud-config\nusers:\n  - name: core\n"
 
-		mockIgnitionContent := `{"ignition":{"version":"3.4.0"},"passwd":{"users":[{"name":"core"}]}}`
-
-		_, err = tmpFile.WriteString(mockIgnitionContent)
-		Expect(err).ToNot(HaveOccurred())
-
-		err = tmpFile.Close()
+		err = os.WriteFile(filepath.Join(tmpDir, "user-data"), []byte(mockUserData), 0o644)
 		Expect(err).ToNot(HaveOccurred())
 
 		name := randomString()
 		i := new(initMachine)
-		session, err := mb.setName(name).setCmd(i.withFakeImage(mb).withIgnitionPath(tmpFile.Name())).run()
+		session, err := mb.setName(name).setCmd(i.withFakeImage(mb).withCloudInitDir(tmpDir)).run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(session).To(Exit(0))
 
 		configDir := filepath.Join(testDir, ".config", "containers", "podman", "machine", testProvider.VMType().String())
 
 		// test that all required machine files are created
-		fileExtensions := []string{".lock", ".json", ".ign"}
+		fileExtensions := []string{".lock", ".json", "-cidata.iso"}
 		for _, ext := range fileExtensions {
 			filename := filepath.Join(configDir, fmt.Sprintf("%s%s", name, ext))
 
@@ -418,13 +412,11 @@ var _ = Describe("podman machine init", func() {
 			Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("file %v does not exist", filename))
 		}
 
-		// enforce that the raw ignition is copied over verbatim
-		createdIgn := filepath.Join(configDir, fmt.Sprintf("%s%s", name, ".ign"))
-		contentWanted, err := os.ReadFile(tmpFile.Name())
+		// enforce that the user-data is copied over verbatim
+		cloudInitDir := filepath.Join(configDir, name+"-cloudinit")
+		contentGot, err := os.ReadFile(filepath.Join(cloudInitDir, "user-data"))
 		Expect(err).ToNot(HaveOccurred())
-		contentGot, err := os.ReadFile(createdIgn)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(contentWanted).To(Equal(contentGot), "The ignition file provided and the ignition file created do not match")
+		Expect(string(contentGot)).To(Equal(mockUserData), "The user-data provided and the user-data created do not match")
 	})
 
 	It("machine init rootless docker.sock check", func() {
@@ -501,11 +493,11 @@ var _ = Describe("podman machine init", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ec).To(Equal(125))
 
-		// WSL does not use ignition
+		// WSL does not use cloud-init
 		if testProvider.VMType() != define.WSLVirt {
-			// Bad ignition path - init fails
+			// Bad cloud-init dir - init fails
 			i = new(initMachine)
-			i.ignitionPath = "/bad/path"
+			i.cloudInitDir = "/bad/path"
 			session, err = mb.setName(name).setCmd(i.withFakeImage(mb)).run()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(session).To(Exit(125))
@@ -519,8 +511,8 @@ var _ = Describe("podman machine init", func() {
 			_, err = os.Stat(cfgpth)
 			Expect(err).To(HaveOccurred())
 
-			ignPath := filepath.Join(cfgDir, mb.name+".ign")
-			_, err = os.Stat(ignPath)
+			isoPath := filepath.Join(cfgDir, mb.name+"-cidata.iso")
+			_, err = os.Stat(isoPath)
 			Expect(err).To(HaveOccurred())
 		}
 	})
