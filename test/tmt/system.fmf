@@ -11,7 +11,7 @@ adjust+:
     - when: distro == centos-stream
       environment+:
         ROOTLESS_USER: "ec2-user"
-    - when: distro == rhel
+    - when: distro ~ rhel
       environment+:
         ROOTLESS_USER: "cloud-user"
     - when: initiator != "packit"
