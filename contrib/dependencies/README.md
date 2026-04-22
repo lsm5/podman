@@ -34,9 +34,9 @@ To know what import a given package use
 
 ```
 $ ./contrib/dependencies/dependencies.sh why ./pkg/ps/
-github.com/containers/podman/v5/pkg/api/handlers/compat
-github.com/containers/podman/v5/pkg/domain/infra/abi
-github.com/containers/podman/v5/pkg/ps
+go.podman.io/podman/v6/pkg/api/handlers/compat
+go.podman.io/podman/v6/pkg/domain/infra/abi
+go.podman.io/podman/v6/pkg/ps
 ```
 
 This is useful to know from where the package is being used.
@@ -58,13 +58,13 @@ Your branch is ahead of 'origin/master' by 17550 commits.
   (use "git push" to publish your local commits)
 Switched to branch 'pr/26577'
 285d284
-< github.com/containers/podman/v5/cmd/podman/quadlet
+< go.podman.io/podman/v6/cmd/podman/quadlet
 318a318
-> github.com/containers/podman/v5/pkg/bindings/artifacts
+> go.podman.io/podman/v6/pkg/bindings/artifacts
 362d361
-< github.com/containers/podman/v5/pkg/logiface
+< go.podman.io/podman/v6/pkg/logiface
 404d402
-< github.com/containers/podman/v5/pkg/systemd/quadlet
+< go.podman.io/podman/v6/pkg/systemd/quadlet
 ```
 
 If the diff from the imports is not clear there is the experimental
@@ -74,33 +74,33 @@ weight-diff command.
 $ ./contrib/dependencies/dependencies.sh weight-diff main pr/26577
 ...
 name                                                                                      diff     bin/podman.1    bin/podman
-github.com/containers/podman/v5/pkg/domain/infra/abi.(*ContainerEngine).QuadletRemove     11025    11025           -
-github.com/containers/podman/v5/pkg/domain/infra/abi.(*ContainerEngine).QuadletInstall    6233     6233            -
-github.com/containers/podman/v5/pkg/bindings/images.Build                                 5760     38418           32658
+go.podman.io/podman/v6/pkg/domain/infra/abi.(*ContainerEngine).QuadletRemove     11025    11025           -
+go.podman.io/podman/v6/pkg/domain/infra/abi.(*ContainerEngine).QuadletInstall    6233     6233            -
+go.podman.io/podman/v6/pkg/bindings/images.Build                                 5760     38418           32658
 github.com/containers/buildah.(*Builder).createMountTargets                               5684     5684            -
-github.com/containers/podman/v5/pkg/domain/infra/abi.(*ContainerEngine).QuadletList       5485     5485            -
+go.podman.io/podman/v6/pkg/domain/infra/abi.(*ContainerEngine).QuadletList       5485     5485            -
 github.com/containers/buildah.(*Builder).Add                                              5231     21172           15941
-github.com/containers/podman/v5/pkg/api/handlers/compat.handleBuildContexts               4254     4254            -
-github.com/containers/podman/v5/pkg/bindings/artifacts.Extract                            2958     -               2958
-github.com/containers/podman/v5/pkg/bindings/images.Build.func2                           2799     2799            -
-github.com/containers/podman/v5/pkg/domain/infra/abi.(*ContainerEngine).installQuadlet    2743     2743            -
+go.podman.io/podman/v6/pkg/api/handlers/compat.handleBuildContexts               4254     4254            -
+go.podman.io/podman/v6/pkg/bindings/artifacts.Extract                            2958     -               2958
+go.podman.io/podman/v6/pkg/bindings/images.Build.func2                           2799     2799            -
+go.podman.io/podman/v6/pkg/domain/infra/abi.(*ContainerEngine).installQuadlet    2743     2743            -
 github.com/containers/buildah.(*Builder).makeContainerImageRef                            2208     8293            6085
 github.com/containers/buildah.(*Builder).setupMounts                                      2087     4869            6956
-github.com/containers/podman/v5/cmd/podman/quadlet.listFlags.AutocompleteFormat.func1     2074     2074            -
+go.podman.io/podman/v6/cmd/podman/quadlet.listFlags.AutocompleteFormat.func1     2074     2074            -
 init                                                                                      2011     2016            5
-github.com/containers/podman/v5/cmd/podman/quadlet.rm                                     1342     1342            -
-github.com/containers/podman/v5/pkg/systemd/quadlet.AppendSubPaths                        1285     1285            -
-github.com/containers/podman/v5/pkg/systemd/parser.(*UnitFile).Parse                      1263     1263            -
+go.podman.io/podman/v6/cmd/podman/quadlet.rm                                     1342     1342            -
+go.podman.io/podman/v6/pkg/systemd/quadlet.AppendSubPaths                        1285     1285            -
+go.podman.io/podman/v6/pkg/systemd/parser.(*UnitFile).Parse                      1263     1263            -
 github.com/containers/buildah/imagebuildah.(*StageExecutor).intermediateImageExists       1248     3829            2581
-github.com/containers/podman/v5/pkg/systemd/parser.(*UnitFileParser).parseGroup           1241     1241            -
-github.com/containers/podman/v5/pkg/systemd/parser.(*UnitFileParser).parseKeyValuePair    1241     1241            -
-github.com/containers/podman/v5/pkg/bindings/artifacts.Pull                               1221     -               1221
-github.com/containers/podman/v5/pkg/bindings/artifacts.Add                                1209     -               1209
-github.com/containers/podman/v5/pkg/systemd/quadlet.getRootlessDirs                       1199     1199            -
-github.com/containers/podman/v5/pkg/domain/infra/tunnel.(*ImageEngine).ArtifactAdd        1198     59              1257
-github.com/containers/podman/v5/pkg/domain/infra/abi.getAllQuadletPaths                   1189     1189            -
-github.com/containers/podman/v5/cmd/podman/quadlet.outputTemplate                         1189     1189            -
-github.com/containers/podman/v5/pkg/bindings/artifacts.Push                               1076     -               1076
+go.podman.io/podman/v6/pkg/systemd/parser.(*UnitFileParser).parseGroup           1241     1241            -
+go.podman.io/podman/v6/pkg/systemd/parser.(*UnitFileParser).parseKeyValuePair    1241     1241            -
+go.podman.io/podman/v6/pkg/bindings/artifacts.Pull                               1221     -               1221
+go.podman.io/podman/v6/pkg/bindings/artifacts.Add                                1209     -               1209
+go.podman.io/podman/v6/pkg/systemd/quadlet.getRootlessDirs                       1199     1199            -
+go.podman.io/podman/v6/pkg/domain/infra/tunnel.(*ImageEngine).ArtifactAdd        1198     59              1257
+go.podman.io/podman/v6/pkg/domain/infra/abi.getAllQuadletPaths                   1189     1189            -
+go.podman.io/podman/v6/cmd/podman/quadlet.outputTemplate                         1189     1189            -
+go.podman.io/podman/v6/pkg/bindings/artifacts.Push                               1076     -               1076
 ```
 
 That gives insight into the symbol sizes. There is likely not much that can be done to avoid it
@@ -118,7 +118,7 @@ To find such dependencies use the cut command
 ```
 $ ./contrib/dependencies/dependencies.sh cut
 ID                                                                                   InDegree   Cut.PackageCount   Cut.AllFiles.Size   Cut.Go.Lines
-github.com/containers/podman/v5/cmd/podman                                           0          905                42.5MB              964250
+go.podman.io/podman/v6/cmd/podman                                           0          905                42.5MB              964250
 vendor/golang.org/x/crypto/internal/poly1305                                         0          1                  16.4KB              395
 vendor/golang.org/x/net/http2/hpack                                                  0          1                  43.9KB              1471
 ...
@@ -157,7 +157,7 @@ if we really gain much by removing it to spend
 This is done with the weight command:
 ```
 $ ./contrib/dependencies/dependencies.sh weight
-   1213750    1125084 /github.com/containers/podman/v5/libpod [syms 1699]
+   1213750    1125084 /go.podman.io/podman/v6/libpod [syms 1699]
                 28143 t (*Container).generateSpec
                 18790 t (*Runtime).setupContainer
 ...
