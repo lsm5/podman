@@ -34,7 +34,11 @@ func (r *Runtime) setupRootlessPortMappingViaPesto(ctr *Container) error {
 	if len(ports) == 0 {
 		return nil
 	}
-	return pasta.PestoAddPorts(r.config, r.pestoSocketPath(), ports)
+	netInfo, err := ctr.getContainerNetworkInfo()
+	if err != nil {
+		return err
+	}
+	return pasta.PestoAddPorts(r.config, r.pestoSocketPath(), ports, netInfo.IPAddress, netInfo.GlobalIPv6Address)
 }
 
 // teardownRootlessPortMappingViaPesto removes this container's port
@@ -44,5 +48,9 @@ func (r *Runtime) teardownRootlessPortMappingViaPesto(ctr *Container) error {
 	if len(ports) == 0 {
 		return nil
 	}
-	return pasta.PestoDeletePorts(r.config, r.pestoSocketPath(), ports)
+	netInfo, err := ctr.getContainerNetworkInfo()
+	if err != nil {
+		return err
+	}
+	return pasta.PestoDeletePorts(r.config, r.pestoSocketPath(), ports, netInfo.IPAddress, netInfo.GlobalIPv6Address)
 }
