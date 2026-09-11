@@ -244,7 +244,7 @@ func MapSpec(p *specgen.PodSpecGenerator) (*specgen.SpecGenerator, error) {
 		spec.BaseHostsFile = p.HostsFile
 	}
 	if len(p.DNSServer) > 0 {
-		var dnsServers []net.IP
+		dnsServers := make([]net.IP, 0, len(p.DNSServer))
 		dnsServers = append(dnsServers, p.DNSServer...)
 
 		spec.DNSServers = dnsServers
