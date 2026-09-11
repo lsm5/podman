@@ -44,7 +44,7 @@ func (n NetworkBackend) ToString() string {
 	case Netavark:
 		return "netavark"
 	}
-	logrus.Errorf("unknown network backend: %q", n)
+	logrus.Errorf("unknown network backend: %d", n)
 	return ""
 }
 

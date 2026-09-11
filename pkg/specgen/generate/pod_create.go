@@ -263,8 +263,8 @@ func MapSpec(p *specgen.PodSpecGenerator) (*specgen.SpecGenerator, error) {
 		spec.Networks = p.Networks
 	}
 	// deprecated cni networks for api users
-	if len(p.CNINetworks) > 0 {
-		spec.CNINetworks = p.CNINetworks
+	if len(p.CNINetworks) > 0 { //nolint:staticcheck // deprecated field kept for backwards compat
+		spec.CNINetworks = p.CNINetworks //nolint:staticcheck // deprecated field kept for backwards compat
 	}
 	if p.NoManageHosts {
 		spec.UseImageHosts = &p.NoManageHosts
